@@ -1,0 +1,114 @@
+[project]
+name = "gh-pulse"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["services/pulse-api"]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "mypy",
+]
+
+[tool.ruff]
+preview = true
+fix = true
+target-version = "py313"
+line-length = 120
+indent-width = 4
+exclude = [
+    ".git",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".idea",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "build",
+    "dist",
+    "node_modules",
+]
+
+[tool.ruff.format]
+preview = true
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = false
+
+[tool.ruff.lint]
+preview = true
+select = ["ALL"]
+ignore = [
+    "B027",       # empty-method-without-abstract-decorator
+    "CPY001",     # missing-copyright-notice — покрыто LICENSE на уровне репозитория
+    "D100",       # undocumented-public-module
+    "D104",       # undocumented-public-package
+    "D106",       # undocumented-public-nested-class
+    "D107",       # undocumented-public-init
+    "D200",       # unnecessary-multiline-docstring
+    "D203",       # incorrect-blank-line-before-class
+    "D205",       # missing-blank-line-after-summary
+    "D212",       # multi-line-summary-first-line
+    "D401",       # non-imperative-mood (докстринги на русском)
+    "D404",       # docstring-starts-with-this
+    "D405",       # non-capitalized-section-name
+    "D415",       # missing-terminal-punctuation
+    "FBT003",     # boolean-positional-value-in-call
+    "FURB180",    # meta-class-abc-meta
+    "ISC003",     # explicit-string-concatenation
+    "PERF401",    # manual-list-comprehension
+    "PLC0415",    # not-top-level-import
+    "PLR09",      # too-many-locals/branches/arguments/...
+    "PLR2004",    # magic-value-comparison
+    "PLR6301",    # no-self-use
+    "RUF001",     # ambiguous-unicode-character-string (кириллица)
+    "RUF002",     # ambiguous-unicode-character-docstring
+    "RUF003",     # ambiguous-unicode-character-comment
+    "S608",       # hardcoded-sql-expression — сырой SQL к ClickHouse/Postgres, см. CLAUDE.md
+    "TRY003",     # long exception messages (тексты ошибок на русском)
+
+    # несовместимо с форматером ruff — официальная рекомендация
+    "COM812",
+    "COM819",
+    "D206",
+    "D300",
+    "E111",
+    "E114",
+    "E117",
+    "ISC001",
+    "ISC002",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "W191",
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.flake8-quotes]
+docstring-quotes = "double"
+inline-quotes = "double"
+multiline-quotes = "double"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+exclude = ["build/", "dist/", "\\.venv/"]
