@@ -123,3 +123,31 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  pulse-api:
+    build:
+      context: .
+      dockerfile: services/pulse-api/Dockerfile
+    container_name: ghpulse-pulse-api
+    networks: [ghpulse]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ghpulse}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-ghpulse}:${POSTGRES_PASSWORD:-ghpulse}@postgres:5432/${POSTGRES_DB:-ghpulse}
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

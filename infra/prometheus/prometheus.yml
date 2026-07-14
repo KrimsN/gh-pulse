@@ -7,7 +7,6 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # pulse-api подключается в задаче 0.3 (эндпоинт /metrics ещё не существует)
-  # - job_name: pulse-api
-  #   static_configs:
-  #     - targets: ["pulse-api:8000"]
+  - job_name: pulse-api
+    static_configs:
+      - targets: ["pulse-api:8000"]
