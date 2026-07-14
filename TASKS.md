@@ -15,7 +15,7 @@
 | # | Задача | Сервис | Статус |
 |---|---|---|---|
 | 0.1 | Инициализация репозитория, MIT-лицензия, `.gitignore`, пустые каталоги сервисов | repo | ☑ |
-| 0.2 | `docker-compose.yml`: ClickHouse, PostgreSQL, Redpanda, Redis, Grafana, Prometheus | infra | ☐ |
+| 0.2 | `docker-compose.yml`: ClickHouse, PostgreSQL, Redpanda, Redis, Grafana, Prometheus | infra | ☑ |
 | 0.3 | Скелет FastAPI: `/health`, `/metrics`, конфиг через pydantic-settings | pulse-api | ☐ |
 | 0.4 | CI: ruff + mypy + pytest + сборка образов; бейджи в README | repo | ☐ |
 | 0.5 | README v0: идея, архитектурная схема, quickstart `docker compose up` | repo | ☐ |
