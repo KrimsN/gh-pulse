@@ -1,0 +1,257 @@
+# Архитектура
+
+## Идея
+
+Сервис в реальном времени поглощает публичный поток событий GitHub (пуши, PR, звёзды, форки,
+issues) и отдаёт по ним аналитику через API за десятки миллисекунд, накапливая сотни миллионов
+событий в ClickHouse.
+
+**Источники данных:**
+- [GH Archive](https://www.gharchive.org/) — почасовые дампы всех публичных событий GitHub с 2011
+  года (`https://data.gharchive.org/YYYY-MM-DD-H.json.gz`, ~1–3 млн событий в час). Основной
+  источник для бэкфилла.
+- [GitHub Events API](https://api.github.com/events) — живой поток (~5000 запросов/час с токеном).
+  Контур реального времени.
+
+## Схема
+
+```mermaid
+flowchart LR
+    subgraph Источники
+        A1[GitHub Events API<br/>live poll]
+        A2[GH Archive<br/>исторические дампы]
+    end
+
+    subgraph "gh-collector (Go)"
+        B[воркер-пул, дедуп, батчинг]
+    end
+
+    subgraph Шина
+        K[(Redpanda / Kafka<br/>topic: gh.events)]
+    end
+
+    subgraph "pulse-consumer (Python)"
+        C[aiokafka → батч-инсерт]
+    end
+
+    subgraph Хранение
+        CH[(ClickHouse<br/>события + materialized views)]
+        PG[(PostgreSQL<br/>API-ключи,<br/>сохранённые отчёты)]
+        R[(Redis<br/>кэш агрегатов, rate limit)]
+    end
+
+    subgraph "pulse-api"
+        F[FastAPI<br/>async, Pydantic, OpenAPI]
+    end
+
+    subgraph Наблюдаемость
+        O[OpenTelemetry → Prometheus → Grafana]
+    end
+
+    A1 --> B
+    A2 --> B
+    B --> K
+    K --> C
+    C --> CH
+    F --> CH
+    F --> PG
+    F --> R
+    B -.-> O
+    C -.-> O
+    F -.-> O
+```
+
+Ключевой шов архитектуры — разделение OLTP (PostgreSQL: метаданные, ключи, сохранённые отчёты) и
+OLAP (ClickHouse: события и агрегаты). Обоснование — [ADR 0001](adr/0001-clickhouse-for-olap-postgres-for-oltp.md).
+
+## Стек
+
+| Слой | Технология | Обоснование |
+|---|---|---|
+| Ingest | **Go** | Высокочастотный I/O-bound поток fetch/produce — см. [ADR 0002](adr/0002-go-for-ingest-python-for-api.md) |
+| Шина событий | **Redpanda** (Kafka-совместимая) | См. [ADR 0003](adr/0003-redpanda-as-kafka-broker.md) |
+| API | **FastAPI** | Async, Pydantic-валидация, автогенерация OpenAPI |
+| OLAP | **ClickHouse** | См. [ADR 0001](adr/0001-clickhouse-for-olap-postgres-for-oltp.md) |
+| OLTP | **PostgreSQL** | См. [ADR 0001](adr/0001-clickhouse-for-olap-postgres-for-oltp.md) |
+| Кэш | **Redis** | Кэш горячих агрегатов и rate limiting по API-ключу |
+| Драйвер PostgreSQL | **asyncpg** + сырой SQL | Аналитический слой уже работает через сырой SQL к ClickHouse; ORM для PostgreSQL добавил бы второй стиль работы с БД без выигрыша на этом масштабе |
+| Миграции | **Alembic** (PostgreSQL) + версионированные `.sql` (ClickHouse) | Раздельные механизмы под каждый датастор — общего инструмента, одинаково удобного для OLTP и OLAP, нет |
+| Тесты | **pytest + testcontainers** | Реальные ClickHouse/PostgreSQL/Kafka в тестах — моки датастора маскируют расхождения с реальным диалектом и поведением при сбое |
+| Линт/типы | **ruff + mypy --strict** | Быстрая статическая проверка |
+| Пакеты | **uv** | Единый резолвер зависимостей и виртуальное окружение |
+| Наблюдаемость | **OpenTelemetry → Prometheus → Grafana** | Трассировка, метрики и дашборды на одном открытом стеке |
+| Нагрузочное тестирование | **k6** | Сценарии как код, встраивается в CI |
+| CI | **GitHub Actions** | Линт, типы, тесты, сборка образов на каждый пуш |
+| Деплой | **docker-compose → Helm-чарт** | Compose для «клонируй и запусти» локально, Helm — для деплоя в Kubernetes |
+
+## Порты и переменные окружения
+
+**Порты и хосты (docker-compose, сеть `ghpulse`):**
+
+| Сервис | Хост в compose | Порт | Наружу |
+|---|---|---|---|
+| ClickHouse | `clickhouse` | 8123 (HTTP), 9000 (native) | 8123, 9000 |
+| PostgreSQL | `postgres` | 5432 | 5432 |
+| Redpanda (Kafka API) | `redpanda` | 9092 | 9092 |
+| Redis | `redis` | 6379 | 6379 |
+| Prometheus | `prometheus` | 9090 | 9090 |
+| Grafana | `grafana` | 3000 | 3000 |
+| pulse-api | `pulse-api` | 8000 | 8000 |
+
+**Переменные окружения** (единые имена во всех сервисах, значения — в локальном `.env`, который в
+git не коммитится):
+
+```dotenv
+CLICKHOUSE_HOST=clickhouse
+CLICKHOUSE_PORT=8123
+CLICKHOUSE_DB=ghpulse
+POSTGRES_DSN=postgresql://ghpulse:ghpulse@postgres:5432/ghpulse
+KAFKA_BROKERS=redpanda:9092
+KAFKA_TOPIC=gh.events
+KAFKA_DLQ_TOPIC=gh.events.dlq
+REDIS_URL=redis://redis:6379/0
+GITHUB_TOKEN=            # для live-поллинга Events API; для GH Archive не нужен
+LOG_LEVEL=INFO
+```
+
+## Модель данных
+
+### Каноническая схема события (внутренний контракт)
+
+Go-коллектор нормализует и GH Archive, и Events API к этому виду; консьюмер вставляет ровно эти поля
+в ClickHouse. Источник истины — `services/gh-collector/internal/model/event.go`, Python-сторона
+дублирует как Pydantic-модель.
+
+```jsonc
+{
+  "event_id":    "48572934012",         // GitHub .id, строка в источнике → UInt64 в CH
+  "event_type":  "WatchEvent",           // .type
+  "created_at":  "2026-06-01T15:00:03Z",
+  "actor_id":    1234567,                // .actor.id
+  "actor_login": "octocat",              // .actor.login
+  "repo_id":     9876543,                // .repo.id
+  "repo_name":   "octocat/Hello-World",  // .repo.name
+  "org_id":      null,                   // .org.id (может отсутствовать)
+  "language":    "",                     // не приходит из события; заполняется отдельным обогащением
+  "payload_size": 512,                   // длина .payload в байтах (грубая метрика активности)
+  "ref":         "refs/heads/main"       // .payload.ref, где применимо (PushEvent/CreateEvent), иначе ""
+}
+```
+
+**Особенности данных GitHub:**
+- `WatchEvent` — это звезда (star). GitHub так и не переименовал этот тип события;
+  `payload.action` всегда `"started"`. Основа эндпоинта trending.
+- `PushEvent.payload`: `{push_id, size, distinct_size, ref, head, before, commits:[...]}`.
+- `PullRequestEvent.payload`: `{action, number, pull_request:{...}}`; `action` ∈ opened/closed/…
+- `ForkEvent.payload`: `{forkee:{...}}`. `IssuesEvent.payload`: `{action, issue:{...}}`.
+- `language` в событии отсутствует — его нет в GH Archive. Поле заполняется отдельным обогащением
+  через GitHub API; до обогащения `language=''`, и эндпоинты с фильтром по языку работают по
+  обогащённому подмножеству.
+- Файлы Archive — по часам UTC: `https://data.gharchive.org/YYYY-MM-DD-H.json.gz` (H = 0..23, без
+  ведущего нуля). Объём часа ~1–3 млн событий (в будни/дневное время США — больше).
+
+### ClickHouse — сырые события
+
+```sql
+CREATE TABLE ghpulse.events (
+    event_id     UInt64,
+    event_type   LowCardinality(String),   -- PushEvent, WatchEvent, PullRequestEvent...
+    created_at   DateTime CODEC(Delta, ZSTD),
+    actor_id     UInt64,
+    actor_login  LowCardinality(String),
+    repo_id      UInt64,
+    repo_name    String,
+    org_id       Nullable(UInt64),
+    language     LowCardinality(String),   -- обогащение
+    payload_size UInt32,
+    ref          String
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (event_type, created_at, repo_id)
+TTL created_at + INTERVAL 2 YEAR
+SETTINGS index_granularity = 8192;
+```
+
+### ClickHouse — materialized view для предагрегации
+
+```sql
+CREATE MATERIALIZED VIEW repo_stars_hourly_mv
+ENGINE = SummingMergeTree
+PARTITION BY toYYYYMM(hour)
+ORDER BY (repo_id, hour)
+AS SELECT
+    repo_id,
+    any(repo_name) AS repo_name,
+    toStartOfHour(created_at) AS hour,
+    count() AS stars
+FROM ghpulse.events
+WHERE event_type = 'WatchEvent'
+GROUP BY repo_id, hour;
+```
+
+Запрос «топ репозиториев по звёздам за час» превращается из полного скана событий в чтение
+агрегата. Измеренный эффект — в [docs/PERFORMANCE.md](PERFORMANCE.md) после первого прогона
+бенчмарка.
+
+### PostgreSQL — метаданные
+
+```sql
+CREATE TABLE api_keys (
+    id          BIGSERIAL PRIMARY KEY,
+    key_hash    TEXT NOT NULL UNIQUE,      -- SHA-256 от ключа; сырой ключ не храним
+    owner       TEXT NOT NULL,
+    rate_limit  INT NOT NULL DEFAULT 100,  -- запросов в минуту
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at  TIMESTAMPTZ
+);
+
+CREATE TABLE saved_reports (
+    id          BIGSERIAL PRIMARY KEY,
+    api_key_id  BIGINT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    params      JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX ix_saved_reports_key ON saved_reports (api_key_id, created_at DESC);
+```
+
+## API (черновик контракта)
+
+```
+GET  /health                      — liveness/readiness
+GET  /api/v1/trending             — топ репозиториев по звёздам
+       ?window=1h|24h|7d&language=python&limit=50
+GET  /api/v1/repos/{owner}/{name} — карточка репозитория: активность, динамика
+GET  /api/v1/languages/trends     — доли языков по времени
+       ?window=30d&granularity=day
+GET  /api/v1/activity/heatmap     — активность по часам/дням недели
+GET  /api/v1/stats                — размер корпуса, лаг ingest, свежесть данных
+POST /api/v1/reports              — сохранить отчёт (нужен API-ключ)
+GET  /api/v1/reports/{id}         — выполнить сохранённый отчёт
+GET  /metrics                     — Prometheus
+```
+
+Требования: везде Pydantic-модели ответов, курсорная пагинация, rate limiting по ключу через Redis,
+`Cache-Control` и ETag на агрегатах, structured logging с `trace_id`.
+
+**Формат ошибок** (единый для всех эндпоинтов):
+
+```json
+{ "error": { "code": "rate_limited", "message": "Rate limit exceeded, retry in 12s" } }
+```
+
+## Осознанно не делаем
+
+- **React/Vue-фронтенд** — Grafana-дашборд и/или минимальная страница на HTMX закрывают демо-нужды.
+- **Дробление на дополнительные сервисы** — ровно два рантайм-сервиса (`gh-collector`, `pulse-api`)
+  плюс консьюмер (`pulse-consumer`). Больше нет технической необходимости на этом масштабе.
+- **Собственная аутентификация с JWT/OAuth и регистрацией** — для аналитического API с server-side
+  ключами достаточно API-ключа.
+- **LLM/AI-функциональность в продукте** — вне скоупа проекта; подробнее — [ADR 0005](adr/0005-portfolio-over-personal-tool.md).
+- **Синтетические данные для бенчмарков** — GH Archive бесплатен и настоящий, нет причины их
+  генерировать.
+
+Каждое число производительности в этом репозитории трассируется к воспроизводимому прогону —
+см. [docs/PERFORMANCE.md](PERFORMANCE.md).
