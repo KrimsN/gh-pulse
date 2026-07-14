@@ -1,0 +1,253 @@
+# Python — style guide
+
+Этот документ описывает договорённости, которые не проверяет линтер: как раскладывать код по
+модулям, как типизировать данные, как обрабатывать ошибки, как писать async-код и тесты. Механические
+правила (длина строки, кавычки, импорты, docstring-конвенция) заданы в `pyproject.toml`
+(`[tool.ruff]`, `[tool.mypy]`) — это источник истины, здесь они не дублируются. Применяется ко всем
+Python-сервисам (`pulse-api`, `pulse-consumer`).
+
+## 1. Именование и структура кода
+
+### 1.1 Раскладка сервиса
+
+Сервис растёт слоями по мере необходимости, а не заранее. Сейчас `pulse-api` — это `app/config.py`
++ `app/main.py`. Как только в одном файле смешивается больше одной ответственности, разносим по
+пакетам:
+
+```
+app/
+  config.py       # Settings, get_settings()
+  main.py         # создание FastAPI, lifespan, middleware
+  api/            # роуты — тонкие, без бизнес-логики
+  db/             # SQL-запросы и доступ к ClickHouse/PostgreSQL/Redis
+  models/         # Pydantic-схемы запросов/ответов
+  exceptions.py   # доменные исключения сервиса
+```
+
+Правило разделения: `api/` не знает SQL, `db/` не знает HTTP. Роут вызывает функцию из `db/`,
+получает типизированный результат, отдаёт его наружу через Pydantic-модель.
+
+### 1.2 Именование
+
+PEP 8 / pep8-naming уже enforced ruff-правилами `N*` —
+[docs.astral.sh/ruff/rules/#pep8-naming-n](https://docs.astral.sh/ruff/rules/#pep8-naming-n).
+Поверх этого:
+
+- Функции доступа к данным — `verb_noun`: `get_trending_repos`, `insert_events_batch`,
+  `fetch_hourly_stats`. Не `trending_repos()` (не понятно, что делает без чтения тела).
+- Булевы переменные и поля — с `is_`/`has_`/`should_`: `is_healthy`, `has_more_pages`.
+- ID сущностей — не голый `int`/`str`, а `NewType`, если ID разных сущностей могут перепутаться
+  местами в сигнатуре (см. 2.1).
+
+### 1.3 Публичный API модуля
+
+`ruff` не требует `__all__` (`D104` и связанные выключены осознанно — докстринг не по умолчанию, а
+когда действительно нужен). Но публичный API пакета — то, что импортируют снаружи, — обозначаем
+явным `__all__` в `__init__.py`, если пакет реэкспортирует более одного символа. Это отличает
+«внутреннее» от «то, на что можно опираться снаружи пакета».
+
+### 1.4 SQL — не ORM
+
+Аналитический SQL — суть проекта, ORM для него не используется. Практика:
+
+- Запрос — это строка (или `.sql`-файл для длинных), а не собранный по кусочкам билдер.
+- Каждая функция в `db/` — один запрос, один смысл. Не смешивать «получить» и «посчитать агрегат»
+  в одной функции с флагом-параметром.
+- Параметры — только через плейсхолдеры драйвера (`asyncpg`: `$1`, `$2`; `clickhouse-connect`:
+  `parameters=`). Никогда не f-string в SQL с значениями из запроса — `S608` выключен в ruff именно
+  потому, что raw SQL — легитимный паттерн здесь, а не потому, что инъекции не важны.
+
+## 2. Типизация и обработка ошибок
+
+### 2.1 Чем описывать данные
+
+<details>
+<summary>Три инструмента, три случая — когда какой</summary>
+
+```python
+# Pydantic BaseModel — данные пересекают границу процесса
+# (HTTP-запрос/ответ, то, что валидируется из внешнего мира)
+class TrendingRepoResponse(BaseModel):
+    repo_name: str
+    stars_gained: int
+
+# dataclass — внутренняя структура внутри процесса, границу не пересекает,
+# валидация не нужна (данные уже пришли из БД типизированными)
+@dataclass(frozen=True, slots=True)
+class RepoStatsRow:
+    repo_name: str
+    stars_gained: int
+
+# NewType — когда просто int/str смешивает несмешиваемое
+RepoId = NewType("RepoId", int)
+UserId = NewType("UserId", int)
+
+def get_repo(repo_id: RepoId) -> RepoStatsRow: ...
+```
+</details>
+
+Правило: `BaseModel` там, где нужна валидация или сериализация на границе процесса; `dataclass`
+внутри процесса, где данные уже гарантированно корректны; `TypedDict` — только для интеропа с кодом,
+которому нужен именно `dict` (например, kwargs в структурированный логгер).
+
+### 2.2 `Any` и `# type: ignore`
+
+`mypy --strict` запрещает неявный `Any`. Явный `Any` и `# type: ignore[код]` допустимы только с
+комментарием, объясняющим, почему статически это не выразить (обычно — граница с нетипизированной
+библиотекой). `# type: ignore` без кода ошибки в квадратных скобках не проходит ревью — он глушит
+любую ошибку на строке, а не ту одну, которую вы проверили.
+
+### 2.3 Валидация — только на границе
+
+Принцип: не валидировать то, что не может случиться. На практике это значит — один слой валидации
+на входе в систему.
+
+<details>
+<summary>Пример: где валидация нужна, а где — нет</summary>
+
+```python
+# ГРАНИЦА: HTTP-запрос — Pydantic валидирует автоматически на входе в роут
+@app.get("/api/v1/trending")
+async def trending(window: TrendingWindow) -> TrendingRepoResponse: ...
+
+# ВНУТРИ: db/trending.py получает уже провалидированный TrendingWindow.
+# Здесь НЕ нужно перепроверять, что window.hours > 0 — Pydantic это гарантировал выше.
+async def fetch_trending(client: AsyncClient, window: TrendingWindow) -> list[RepoStatsRow]:
+    ...
+```
+</details>
+
+### 2.4 Исключения
+
+Доменные исключения сервиса — в `app/exceptions.py`, наследуются от одного базового класса сервиса
+(`class PulseApiError(Exception)`), не от голого `Exception` по отдельности. Это даёт один `except
+PulseApiError` на границе (FastAPI exception handler), который переводит доменную ошибку в HTTP-
+ответ, — и не даёт доменной ошибке случайно утечь наружу как 500 без структурированного тела.
+
+Общих/переиспользуемых между сервисами исключений не заводим, пока не появится второй сервис,
+которому реально нужен тот же класс ошибки, — раньше это гадание на будущее.
+
+### 2.5 Чего не делать
+
+- Не оборачивать в `try/except` то, что физически не может бросить — обратная сторона того же
+  принципа, что и валидация только на границе (см. 2.3). `except Exception: pass` ради «на всякий
+  случай» не проходит ревью — молча проглоченная ошибка дороже, чем упавший процесс с трейсбеком.
+- Голый `except:` (без класса) запрещён `mypy`/`ruff` (`E722`, `BLE001`) — это уже enforced.
+
+## 3. Async, ресурсы и производительность
+
+### 3.1 Никаких блокирующих вызовов в async-коде
+
+<details>
+<summary>Плохо / хорошо</summary>
+
+```python
+# ПЛОХО: requests — синхронный, блокирует event loop всего процесса
+async def fetch_repo(name: str) -> dict:
+    return requests.get(f"https://api.github.com/repos/{name}").json()
+
+# ХОРОШО: httpx.AsyncClient — не блокирует event loop
+async def fetch_repo(client: httpx.AsyncClient, name: str) -> dict:
+    response = await client.get(f"https://api.github.com/repos/{name}")
+    return response.json()
+```
+</details>
+
+Это касается и `time.sleep` (→ `asyncio.sleep`), и любых sync-драйверов БД. Проект уже стоит на
+async-стеке (`asyncpg`, `clickhouse-connect[async]`, `redis.asyncio`) — синхронный клиент к тем же
+сторам в async-функции не подключаем никогда, даже «на скорую руку».
+
+### 3.2 Управление ресурсами
+
+Канонический паттерн уже есть в [main.py](../services/pulse-api/app/main.py) — пулы
+(`clickhouse`, `postgres`, `redis`) создаются один раз в `lifespan` и живут в `app.state`, закрываются
+в `finally`. Новый сервис, новый клиент стороннего API — тот же паттерн: создание пула/клиента в
+одном месте при старте, явное закрытие при остановке, никаких соединений, открываемых по одному на
+запрос.
+
+### 3.3 Батчинг вместо N+1
+
+`pulse-consumer` вставляет события пачками, не по одному — это не оптимизация «на будущее», а
+единственный режим, в котором ClickHouse рассчитан работать
+([ClickHouse best practices](https://clickhouse.com/docs/en/optimize/bulk-inserts)). Практика: если
+цикл делает `await` внутри `for` по элементам одного источника — это повод спросить, нельзя ли
+собрать все элементы и отправить одним batch-запросом (`executemany`, `insert_many` и аналоги).
+
+### 3.4 Ограниченная конкурентность
+
+<details>
+<summary>Пример: gather без ограничения — риск; с Semaphore — контролируемо</summary>
+
+```python
+# РИСК: если repos — 10 000 элементов, это 10 000 одновременных соединений
+results = await asyncio.gather(*(fetch_repo(client, r) for r in repos))
+
+# КОНТРОЛИРУЕМО: не больше 20 одновременных запросов
+semaphore = asyncio.Semaphore(20)
+
+async def bounded_fetch(client: httpx.AsyncClient, name: str) -> dict:
+    async with semaphore:
+        return await fetch_repo(client, name)
+
+results = await asyncio.gather(*(bounded_fetch(client, r) for r in repos))
+```
+</details>
+
+`asyncio.gather` без ограничения допустим только когда размер коллекции заведомо мал и известен
+заранее (единицы, не «сколько прилетит из API»).
+
+## 4. Тестирование и логирование
+
+### 4.1 Тесты — против реальных сторов
+
+`pytest` + `testcontainers` против реальных ClickHouse/PostgreSQL/Kafka, моков для датасторов нет.
+Настройка контейнеров и фикстур —
+[testcontainers-python docs](https://testcontainers-python.readthedocs.io/).
+
+### 4.2 Структура теста
+
+Arrange-Act-Assert, разделённые пустой строкой — без явных комментариев `# arrange` и т. д., пустая
+строка уже маркирует границу:
+
+<details>
+<summary>Пример</summary>
+
+```python
+async def test_fetch_trending_returns_repos_sorted_by_stars(clickhouse_client):
+    await insert_test_events(clickhouse_client, events=[...])
+
+    result = await fetch_trending(clickhouse_client, window=TrendingWindow(hours=24))
+
+    assert [r.repo_name for r in result] == ["repo-b", "repo-a"]
+```
+</details>
+
+### 4.3 Именование тестов
+
+`test_<что_проверяем>_<при_каком_условии>` — имя теста должно быть читаемо как описание поведения
+без открытия тела функции: `test_health_returns_503_when_clickhouse_down`, а не
+`test_health_2`.
+
+### 4.4 Логирование — событийные имена и поля
+
+Конвенция уже введена [ADR 0006](adr/0006-structlog-for-logging.md) и `main.py`:
+
+- Имя события — `snake_case`, глагол в прошедшем времени или существительное-факт:
+  `request_started`, `dependency_check_failed`. Не предложение и не f-string с интерполяцией —
+  весь контекст идёт отдельными kwargs (`logger.info("request_finished", status_code=..., duration_ms=...)`),
+  чтобы поля были агрегируемы в JSON, а не склеены в текст.
+- Request-scoped контекст (`trace_id`, `path`, `method`) — только через
+  `structlog.contextvars.bind_contextvars`, не передаётся вручную параметром через цепочку вызовов.
+
+### 4.5 Чего не логировать
+
+- Значения внутри батч-циклов поэлементно (см. 3.3) — один `logger.info("batch_inserted",
+  count=len(batch))` после цикла, не `count` записей `logger.info` внутри него.
+- Сырые тела запросов/ответов и содержимое `postgres_dsn`/токенов — секреты и PII в структурированный
+  JSON-лог не попадают, даже в `debug`-уровне.
+
+## Смотрите также
+
+- `pyproject.toml` — механические правила (`ruff`, `mypy`), источник истины для форматирования и
+  линтинга.
+- [docs/adr/](adr/) — обоснование конкретных технических решений (ClickHouse, structlog и т. д.).
