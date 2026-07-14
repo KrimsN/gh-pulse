@@ -51,6 +51,9 @@ ignore = [
     "B027",       # empty-method-without-abstract-decorator
     "CPY001",     # missing-copyright-notice — покрыто LICENSE на уровне репозитория
     "D100",       # undocumented-public-module
+    "D101",       # undocumented-public-class — докстринг только когда правда нужен, не по умолчанию
+    "D102",       # undocumented-public-method
+    "D103",       # undocumented-public-function
     "D104",       # undocumented-public-package
     "D106",       # undocumented-public-nested-class
     "D107",       # undocumented-public-init
@@ -112,3 +115,7 @@ convention = "google"
 python_version = "3.13"
 strict = true
 exclude = ["build/", "dist/", "\\.venv/"]
+
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true

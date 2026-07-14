@@ -9,6 +9,9 @@ dependencies = [
     "pydantic-settings",
     "prometheus-client",
     "structlog",
+    "clickhouse-connect[async]>=1.4.2",
+    "asyncpg>=0.31.0",
+    "redis>=8.0.1",
 ]
 
 [tool.uv]
