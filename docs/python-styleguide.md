@@ -64,6 +64,89 @@ PEP 8 / pep8-naming уже enforced ruff-правилами `N*` —
   `parameters=`). Никогда не f-string в SQL с значениями из запроса — `S608` выключен в ruff именно
   потому, что raw SQL — легитимный паттерн здесь, а не потому, что инъекции не важны.
 
+### 1.5 FastAPI, а не Starlette — где это возможно
+
+FastAPI построен поверх Starlette и реэкспортирует большую часть публичного API (`Request`,
+`Response`, `JSONResponse`, `status` и т. д.). Импортируем именно через `fastapi`/`fastapi.responses`
+— один источник истины на проект, а не два пути к одному и тому же классу вперемешку. Импорт
+напрямую из `starlette.*` — только там, где FastAPI ничего не реэкспортирует.
+
+<details>
+<summary>Что откуда импортировать</summary>
+
+```python
+# ХОРОШО — путь через fastapi
+from fastapi import Request, status
+from fastapi.responses import Response, JSONResponse
+
+# ПЛОХО — тот же класс, но путь через starlette
+from starlette.requests import Request
+from starlette.responses import Response, JSONResponse
+
+# ИСКЛЮЧЕНИЕ: FastAPI не реэкспортирует ASGI-middleware база-классы —
+# для собственного BaseHTTPMiddleware импорт из starlette легитимен (см. middleware.py)
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+```
+</details>
+
+### 1.6 HTTP-статусы — константы, не числа
+
+`fastapi.status` (реэкспорт `starlette.status`) — именованные константы на каждый код. Голый
+`200`/`503` в коде читается медленнее, чем `status.HTTP_200_OK`, и не подсвечивает опечатку в коде
+(`503` вместо, скажем, `530` — оба «просто число», а `status.HTTP_530_...` не существует и упадёт на
+импорте). `PLR2004` (magic-value-comparison) в ruff выключен осознанно — оставляет этот случай
+человеку, здесь правило и фиксируется.
+
+```python
+# ПЛОХО
+return JSONResponse(content=body, status_code=200 if healthy else 503)
+
+# ХОРОШО
+return JSONResponse(
+    content=body,
+    status_code=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
+)
+```
+
+### 1.7 Именованные аргументы — по умолчанию
+
+Позиционные аргументы не подписаны на месте вызова: перепутать порядок легко, а линтер это не
+ловит (типы часто совпадают или неявно приводятся). По умолчанию — именованные аргументы. Позиция
+допустима, когда аргумент короткий и однозначно читается на месте (простой литерал, атрибут без
+цепочки вызовов) — сложное выражение (вызов, цепочка методов, awaitable) подписываем ключом, даже
+если оно единственное такое в вызове. Стиль можно смешивать внутри одного вызова: то, что коротко —
+по позиции, то, что длинно или неочевидно — по ключу. Ещё один законный повод остаться на позиции —
+общепризнанная конвенция самой библиотеки/языка, ломать её ради буквы правила не стоит.
+
+<details>
+<summary>Примеры</summary>
+
+```python
+# ПЛОХО — три однотипных строки/числа, порядок на месте вызова не виден
+REQUEST_COUNT.labels(request.method, request.url.path, response.status_code).inc()
+
+# ХОРОШО
+REQUEST_COUNT.labels(method=request.method, path=request.url.path, status=response.status_code).inc()
+
+# ПЛОХО — check прячется в позиции, хотя это целая цепочка вызовов
+await probe_dependency("clickhouse", state.clickhouse.ping())
+
+# ХОРОШО — name короткий и однозначный, остаётся по позиции; check — сложное выражение, по ключу
+await probe_dependency("clickhouse", check=state.clickhouse.ping())
+
+# ИСКЛЮЧЕНИЕ — общепризнанная конвенция: у структлога event всегда первым позиционным
+logger.info("request_started")
+logger.warning("dependency_check_degraded", dependency=name)
+
+# ИСКЛЮЧЕНИЕ — общепризнанная конвенция драйверов БД: запрос всегда первым позиционным
+await state.postgres.fetchval("SELECT 1")
+
+# ИСКЛЮЧЕНИЕ — один параметр, перепутать не с чем
+redis.Redis.from_url(settings.redis_url)
+app.include_router(router)
+```
+</details>
+
 ## 2. Типизация и обработка ошибок
 
 ### 2.1 Чем описывать данные
