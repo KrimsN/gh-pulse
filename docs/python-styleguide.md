@@ -329,7 +329,25 @@ async def test_fetch_trending_returns_repos_sorted_by_stars(clickhouse_client):
 - Request-scoped контекст (`trace_id`, `path`, `method`) — только через
   `structlog.contextvars.bind_contextvars`, не передаётся вручную параметром через цепочку вызовов.
 
-### 4.5 Чего не логировать
+### 4.5 Метки метрик — шаблон роута, а не путь запроса
+
+Label в Prometheus заводит отдельную time series на каждое уникальное значение. Поэтому в метку пути
+идёт **шаблон** роута (`/api/v1/repos/{owner}/{name}`), а не фактический путь
+(`/api/v1/repos/torvalds/linux`): иначе кардинальность растёт с числом запросов, а не с числом роутов,
+и Prometheus ложится на первом же параметризованном эндпоинте. Готовая реализация — `_route_label` в
+[middleware.py](../services/pulse-api/app/middleware.py), новый сервис берёт её оттуда.
+
+Две ловушки, которые она закрывает и которые неочевидны по документации FastAPI:
+
+- **Префикс `include_router` не попадает в `route.path_format`.** Для роута, подключённого с
+  `prefix="/api/v1"`, `scope["route"].path_format` вернёт `/repos/{owner}/{name}` — без префикса.
+  Эффективный путь лежит только в приватном `scope["fastapi"]["effective_route_context"]`, поэтому
+  спрашиваем сначала его, а `scope["route"]` держим фолбэком: при изменении приватного API метка
+  потеряет префикс, но останется шаблоном.
+- **`scope["route"]` отсутствует на 404** — обращаться только через `.get()`, иначе несовпавший путь
+  роняет middleware. Такие запросы идут под меткой `unmatched`, единой на все несуществующие пути.
+
+### 4.6 Чего не логировать
 
 - Значения внутри батч-циклов поэлементно (см. 3.3) — один `logger.info("batch_inserted",
   count=len(batch))` после цикла, не `count` записей `logger.info` внутри него.
