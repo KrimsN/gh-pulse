@@ -10,14 +10,16 @@ Python-сервисам (`pulse-api`, `pulse-consumer`).
 
 ### 1.1 Раскладка сервиса
 
-Сервис растёт слоями по мере необходимости, а не заранее. Сейчас `pulse-api` — это `app/config.py`
-+ `app/main.py`. Как только в одном файле смешивается больше одной ответственности, разносим по
-пакетам:
+Сервис растёт слоями по мере необходимости, а не заранее. Как только в одном файле смешивается
+больше одной ответственности, разносим по пакетам — так `pulse-api` уже прошёл путь от одного
+`main.py` до текущей раскладки:
 
 ```
 app/
   config.py       # Settings, get_settings()
-  main.py         # создание FastAPI, lifespan, middleware
+  main.py         # сборка приложения: structlog.configure, FastAPI(), lifespan, регистрация middleware и роутера
+  middleware.py   # ASGI-middleware сервиса (TraceIdMiddleware, метрики запроса)
+  helpers.py      # мелкие переиспользуемые хелперы уровня приложения, не привязанные к конкретному роуту
   api/            # роуты — тонкие, без бизнес-логики
   db/             # SQL-запросы и доступ к ClickHouse/PostgreSQL/Redis
   models/         # Pydantic-схемы запросов/ответов
@@ -26,6 +28,11 @@ app/
 
 Правило разделения: `api/` не знает SQL, `db/` не знает HTTP. Роут вызывает функцию из `db/`,
 получает типизированный результат, отдаёт его наружу через Pydantic-модель.
+
+`app` — модульная переменная в `main.py`; роуты в `api/` её не импортируют напрямую (это дало бы
+циклический импорт: `main.py` импортирует `router` из `api/`, а `api/` импортировал бы `app` обратно
+из `main.py`). Внутри обработчика состояние читается через параметр `request: Request` и
+`request.app.state.*`, а не через захваченную глобальную `app`.
 
 ### 1.2 Именование
 
@@ -230,7 +237,7 @@ async def test_fetch_trending_returns_repos_sorted_by_stars(clickhouse_client):
 
 ### 4.4 Логирование — событийные имена и поля
 
-Конвенция уже введена [ADR 0006](adr/0006-structlog-for-logging.md) и `main.py`:
+Конвенция уже введена [ADR 0006](adr/0006-structlog-for-logging.md), `main.py` и `middleware.py`:
 
 - Имя события — `snake_case`, глагол в прошедшем времени или существительное-факт:
   `request_started`, `dependency_check_failed`. Не предложение и не f-string с интерполяцией —
