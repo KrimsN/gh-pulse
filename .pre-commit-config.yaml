@@ -1,0 +1,49 @@
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21 # держим синхронно с версией ruff в dev-группе pyproject.toml
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        stages: [pre-commit, pre-push]
+      - id: ruff-format
+        stages: [pre-commit, pre-push]
+
+  - repo: local
+    hooks:
+      - id: mypy-pulse-api
+        name: mypy --strict (pulse-api)
+        # используем venv проекта через uv, а не изолированное окружение pre-commit —
+        # иначе пришлось бы вручную дублировать все рантайм-зависимости в additional_dependencies
+        entry: uv run mypy --strict services/pulse-api
+        language: system
+        pass_filenames: false
+        files: ^services/pulse-api/
+        stages: [pre-commit, pre-push]
+
+      # Приватные пути (CLAUDE.md/AGENTS.md/SPEC.md/.claude/) не должны попасть в публичный
+      # репозиторий — см. «Приватное и публичное» в CLAUDE.md. Раньше это были ручные скрипты в
+      # .git/hooks/{pre-commit,pre-push}; перенесены сюда, т. к. pre-commit на нативном Windows
+      # Python не резолвит `#!/bin/sh` при вызове старых хуков напрямую (ExecutableNotFoundError).
+      - id: forbid-private-paths-staged
+        name: приватные пути в staged-файлах
+        language: fail
+        entry: >-
+          ОШИБКА: коммит содержит приватные файлы, которые не должны попасть в публичный
+          репозиторий. См. «Приватное и публичное» в CLAUDE.md.
+        files: '^\.claude/|^(CLAUDE|AGENTS|SPEC)\.md$'
+        stages: [pre-commit]
+
+      - id: forbid-private-paths-tracked
+        name: приватные пути среди всех отслеживаемых файлов
+        # полное сканирование git ls-files, а не только диффа пуша — ловит утечку, даже если
+        # коммит был сделан в обход pre-commit-хука (--no-verify)
+        entry: >-
+          bash -c 'leaked=$(git ls-files | grep -E "^\.claude/|^(CLAUDE|AGENTS|SPEC)\.md$"); if
+          [ -n "$leaked" ]; then echo "ОШИБКА: приватные пути в отслеживаемых файлах:" >&2; echo
+          "$leaked" >&2; exit 1; fi'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -179,6 +179,26 @@ sudo apt update && sudo apt install -y k6
 git --version && docker compose version && go version && uv --version && python3 --version
 ```
 
+### Git-хуки
+
+Перед коммитом и перед пушем автоматически прогоняются `ruff check`, `ruff format` и `mypy --strict`
+для Python-сервисов — конфигурация в [`.pre-commit-config.yaml`](.pre-commit-config.yaml). Установка
+(один раз после клонирования):
+
+```bash
+uv sync --all-packages
+uv run pre-commit install
+```
+
+`uv sync` без `--all-packages` синхронизирует только корневой пакет workspace и не поставит
+зависимости `pulse-api` в окружение — для локальной разработки нужна именно эта форма.
+
+Прогнать хуки вручную по всем файлам (без коммита):
+
+```bash
+uv run pre-commit run --all-files
+```
+
 ## Технические решения
 
 Каждое архитектурное решение зафиксировано отдельным ADR:
