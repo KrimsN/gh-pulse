@@ -1,5 +1,3 @@
-<!-- Бейджи: CI и License — статичные картинки уже верны; бейдж CI указывает на плейсхолдер
-     KrimsN/gh-pulse — заменить на реальные логин/организацию и workflow при публикации (задачи 0.4/0.7). -->
 [![CI](https://img.shields.io/github/actions/workflow/status/KrimsN/gh-pulse/ci.yml?branch=main&label=CI)](https://github.com/KrimsN/gh-pulse/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
@@ -68,7 +66,7 @@ flowchart LR
 Единственное системное требование — Docker.
 
 ```bash
-git clone https://github.com/OWNER/gh-pulse.git
+git clone https://github.com/KrimsN/gh-pulse.git
 cd gh-pulse
 docker compose up
 ```
@@ -198,6 +196,13 @@ uv run pre-commit install
 ```bash
 uv run pre-commit run --all-files
 ```
+
+### CI
+
+На каждый пуш и pull request [workflow](.github/workflows/ci.yml) прогоняет те же `ruff` и
+`mypy --strict`, что и хуки, плюс `pytest` и смоук-прогон окружения: `docker compose up --wait`
+и запрос к `/health`. Последний джоб держит обещание из «Быстрого старта» — что репозиторий
+поднимается одной командой с чистого клона.
 
 ## Технические решения
 
