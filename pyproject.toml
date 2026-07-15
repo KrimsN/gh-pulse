@@ -15,7 +15,17 @@ dev = [
     "ruff",
     "mypy",
     "pre-commit",
+    "pytest",
+    "pytest-asyncio",
+    "httpx",       # ASGITransport для тестов эндпоинтов без поднятого сервера
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["services/pulse-api/tests"]
+# app не установлен как пакет (package = false), а pytest запускается из корня workspace —
+# без этого `import app` в тестах не резолвится.
+pythonpath = ["services/pulse-api"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 preview = true
@@ -24,6 +34,10 @@ target-version = "py313"
 line-length = 120
 indent-width = 4
 exclude = [
+    # Форматирование Python-блоков внутри Markdown — preview-фича ruff, и она переписывает
+    # намеренно компактные примеры в docs/. Хук ruff-format .md всё равно не трогает
+    # (types_or: python/pyi/jupyter), так что без исключения CI проверял бы строже хуков.
+    "*.md",
     ".git",
     ".venv",
     ".pytest_cache",
@@ -100,6 +114,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"**/tests/**" = ["S101"]  # assert — рабочий инструмент pytest, а не забытая отладка
+
+[tool.ruff.lint.isort]
+# Внутри сервиса ruff определяет `app` как first-party по расположению файла, а в tests/ — уже нет,
+# и импорт уезжал бы в третью сторону. Явно называем корни пакетов.
+known-first-party = ["app"]
 
 [tool.ruff.lint.flake8-quotes]
 docstring-quotes = "double"
