@@ -18,9 +18,9 @@
 | 0.2 | `docker-compose.yml`: ClickHouse, PostgreSQL, Redpanda, Redis, Grafana, Prometheus | infra | ☑ |
 | 0.3 | Скелет FastAPI: `/health`, `/metrics`, конфиг через pydantic-settings | pulse-api | ☑ |
 | 0.4 | CI: ruff + mypy + pytest + сборка образов; бейджи в README | repo | ☑ |
-| 0.5 | README v0: идея, архитектурная схема, quickstart `docker compose up` | repo | ☐ |
-| 0.6 | Зафиксировать ADR 0001–0005 (см. `docs/adr/`) | docs | ☐ |
-| 0.7 | **Опубликовать репозиторий на GitHub, убедиться, что CI зелёный** | repo | ☐ |
+| 0.5 | README v0: идея, архитектурная схема, quickstart `docker compose up` | repo | ☑ |
+| 0.6 | Зафиксировать ADR 0001–0005 (см. `docs/adr/`) | docs | ☑ |
+| 0.7 | **Опубликовать репозиторий на GitHub, убедиться, что CI зелёный** | repo | ☑ |
 
 **Критерий выхода:** чистый клон → `docker compose up` → `/health` возвращает 200. Репозиторий публичный.
 

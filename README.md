@@ -206,26 +206,29 @@ uv run pre-commit run --all-files
 
 ## Технические решения
 
-Каждое архитектурное решение зафиксировано отдельным ADR:
+Каждое архитектурное решение зафиксировано отдельным ADR — с контекстом, отвергнутыми
+альтернативами и последствиями. Полное оглавление и принцип ведения: [docs/adr/](docs/adr/README.md).
 
 - [0001 — ClickHouse для аналитики, PostgreSQL для метаданных](docs/adr/0001-clickhouse-for-olap-postgres-for-oltp.md)
 - [0002 — Go для ingest, Python для консьюмера и API](docs/adr/0002-go-for-ingest-python-for-api.md)
 - [0003 — Redpanda как Kafka-совместимый брокер](docs/adr/0003-redpanda-as-kafka-broker.md)
 - [0004 — At-least-once доставка, идемпотентные вставки](docs/adr/0004-at-least-once-delivery-idempotent-inserts.md)
 - [0005 — Портфолио-артефакт, а не личный инструмент](docs/adr/0005-portfolio-over-personal-tool.md)
+- [0006 — structlog для структурированного логирования](docs/adr/0006-structlog-for-logging.md)
 
 ## Производительность
 
-`(появится после Фазы 3 — см. docker compose up и живой прогресс в TASKS.md)`
+`(заголовочные числа и GIF дашборда Grafana — в Фазе 3; живой прогресс — в TASKS.md)`
 
-Каждое число в этом репозитории трассируется к воспроизводимому прогону бенчмарка —
-см. `docs/PERFORMANCE.md` (появится вместе с первой оптимизацией).
+Каждое число в этом репозитории трассируется к воспроизводимому прогону бенчмарка и к коммиту,
+на котором прогон сделан. Правило, формат записи и — по мере оптимизаций — сама история:
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Документация
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — схема, стек, модель данных, API-контракт
-- [docs/adr/](docs/adr/) — architecture decision records
-- [docs/PERFORMANCE.md](docs/PERFORMANCE.md) — история оптимизации *(появится в Фазе 3)*
+- [docs/adr/](docs/adr/README.md) — architecture decision records
+- [docs/PERFORMANCE.md](docs/PERFORMANCE.md) — история оптимизации *(наполняется по мере оптимизаций)*
 - [TASKS.md](TASKS.md) — текущий статус и план работ по фазам
 
 ## Лицензия

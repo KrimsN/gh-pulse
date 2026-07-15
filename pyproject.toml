@@ -91,7 +91,7 @@ ignore = [
     "RUF001",     # ambiguous-unicode-character-string (кириллица)
     "RUF002",     # ambiguous-unicode-character-docstring
     "RUF003",     # ambiguous-unicode-character-comment
-    "S608",       # hardcoded-sql-expression — сырой SQL к ClickHouse/Postgres, см. CLAUDE.md
+    "S608",       # hardcoded-sql-expression — сырой SQL к ClickHouse/Postgres, см. docs/ARCHITECTURE.md
     "TRY003",     # long exception messages (тексты ошибок на русском)
 
     # несовместимо с форматером ruff — официальная рекомендация

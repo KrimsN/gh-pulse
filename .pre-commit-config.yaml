@@ -22,26 +22,27 @@ repos:
         files: ^services/pulse-api/
         stages: [pre-commit, pre-push]
 
-      # Приватные пути (CLAUDE.md/AGENTS.md/SPEC.md/.claude/) не должны попасть в публичный
-      # репозиторий — см. «Приватное и публичное» в CLAUDE.md. Раньше это были ручные скрипты в
-      # .git/hooks/{pre-commit,pre-push}; перенесены сюда, т. к. pre-commit на нативном Windows
-      # Python не резолвит `#!/bin/sh` при вызове старых хуков напрямую (ExecutableNotFoundError).
+      # Локальные рабочие заметки автора живут в репозитории, но версионируются отдельно от кода и
+      # в общую историю не уходят. Хук — страховка от случайного `git add .`.
+      # Раньше это были ручные скрипты в .git/hooks/{pre-commit,pre-push}; перенесены сюда, т. к.
+      # pre-commit на нативном Windows Python не резолвит `#!/bin/sh` при вызове старых хуков
+      # напрямую (ExecutableNotFoundError).
       - id: forbid-private-paths-staged
-        name: приватные пути в staged-файлах
+        name: локальные рабочие файлы в staged
         language: fail
         entry: >-
-          ОШИБКА: коммит содержит приватные файлы, которые не должны попасть в публичный
-          репозиторий. См. «Приватное и публичное» в CLAUDE.md.
+          ОШИБКА: коммит содержит локальные рабочие файлы, которые не версионируются в этом
+          репозитории. Убрать их из индекса: git restore --staged <путь>.
         files: '^\.claude/|^(CLAUDE|AGENTS|SPEC)\.md$'
         stages: [pre-commit]
 
       - id: forbid-private-paths-tracked
-        name: приватные пути среди всех отслеживаемых файлов
+        name: локальные рабочие файлы среди отслеживаемых
         # полное сканирование git ls-files, а не только диффа пуша — ловит утечку, даже если
         # коммит был сделан в обход pre-commit-хука (--no-verify)
         entry: >-
           bash -c 'leaked=$(git ls-files | grep -E "^\.claude/|^(CLAUDE|AGENTS|SPEC)\.md$"); if
-          [ -n "$leaked" ]; then echo "ОШИБКА: приватные пути в отслеживаемых файлах:" >&2; echo
+          [ -n "$leaked" ]; then echo "ОШИБКА: локальные рабочие файлы среди отслеживаемых:" >&2; echo
           "$leaked" >&2; exit 1; fi'
         language: system
         pass_filenames: false
