@@ -4,11 +4,11 @@ version = "0.1.0"
 description = "Аналитическое REST API GH Pulse поверх ClickHouse/PostgreSQL/Redis"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "pydantic-settings",
-    "prometheus-client",
-    "structlog",
+    "fastapi>=0.139.0",
+    "uvicorn[standard]>=0.51.0",
+    "pydantic-settings>=2.14.2",
+    "prometheus-client>=0.25.0",
+    "structlog>=26.1.0",
     "clickhouse-connect[async]>=1.4.2",
     "asyncpg>=0.31.0",
     "redis>=8.0.1",

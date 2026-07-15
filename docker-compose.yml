@@ -14,15 +14,17 @@ volumes:
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:24.8.14.39-alpine
     container_name: ghpulse-clickhouse
     networks: [ghpulse]
     environment:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ghpulse}
       CLICKHOUSE_SKIP_USER_SETUP: 1
+    # Порты датасторов публикуются только на loopback: в форме "8123:8123" Docker слушает на всех
+    # интерфейсах хоста, и беспарольный ClickHouse оказался бы доступен любому соседу по сети.
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
     volumes:
       - ch-data:/var/lib/clickhouse
       - ./infra/clickhouse/migrations:/docker-entrypoint-initdb.d:ro
@@ -33,7 +35,7 @@ services:
       retries: 10
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.10-alpine
     container_name: ghpulse-postgres
     networks: [ghpulse]
     environment:
@@ -41,7 +43,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ghpulse}
       POSTGRES_DB: ${POSTGRES_DB:-ghpulse}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
@@ -65,7 +67,7 @@ services:
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092
       - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
     volumes:
       - redpanda-data:/var/lib/redpanda/data
     healthcheck:
@@ -75,11 +77,11 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.6-alpine
     container_name: ghpulse-redis
     networks: [ghpulse]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -96,7 +98,7 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy"]
       interval: 5s
@@ -111,7 +113,7 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -138,7 +140,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       clickhouse:
         condition: service_healthy

@@ -1,7 +1,9 @@
 # Сборочный контекст — корень репозитория (нужен доступ к workspace-файлам uv.lock/pyproject.toml).
 
 FROM python:3.13-slim AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Версия uv зафиксирована, а не :latest — иначе пересборка в разные дни тянет разный бинарник,
+# и образ перестаёт быть воспроизводимым. Держим синхронно с локальным uv.
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 ENV UV_PYTHON_DOWNLOADS=0 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 WORKDIR /app
