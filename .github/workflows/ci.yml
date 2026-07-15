@@ -62,6 +62,42 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run pytest
 
+  go-build-test:
+    name: go vet + go test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/gh-collector
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.0
+
+      # go-version-file вместо явной версии: единственный источник истины о версии Go — go.mod
+      # самого сервиса, и разъехаться им негде.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: services/gh-collector/go.mod
+          # Кэш выключен намеренно: коллектор stdlib-only, go.sum не существует — кэшировать нечего,
+          # а setup-go по умолчанию ищет go.sum и спотыкается о его отсутствие. Появятся
+          # зависимости (Kafka-клиент) — включить обратно вместе с cache-dependency-path.
+          cache: false
+
+      # gofmt не имеет режима проверки с ненулевым кодом возврата: -l печатает имена
+      # неотформатированных файлов и молча выходит с нулём. Поэтому падаем по непустому выводу сами.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Не отформатировано gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - run: go build ./...
+      - run: go vet ./...
+
+      # -race: коллектор — конкурентный код (fetch в одной горутине, потребление в другой), а гонки
+      # проявляются не на каждом прогоне. Тесты не ходят в сеть: HTTP-путь проверяется httptest'ом.
+      - run: go test -race ./...
+
   docker-smoke:
     name: docker compose up + /health
     runs-on: ubuntu-latest
