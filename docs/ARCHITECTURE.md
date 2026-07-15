@@ -120,35 +120,46 @@ LOG_LEVEL=INFO
 
 Go-коллектор нормализует и GH Archive, и Events API к этому виду; консьюмер вставляет ровно эти поля
 в ClickHouse. Источник истины — `services/gh-collector/internal/model/event.go`, Python-сторона
-дублирует как Pydantic-модель.
+дублирует как Pydantic-модель. Схема переживает обе эпохи данных ([ADR 0007](adr/0007-hybrid-data-epochs.md)):
+все поля берутся с верхнего уровня события, где формат не менялся.
 
 ```jsonc
 {
-  "event_id":    "48572934012",         // GitHub .id, строка в источнике → UInt64 в CH
+  "event_id":    "48572934012",         // GitHub .id — в источнике строка, в CH UInt64
   "event_type":  "WatchEvent",           // .type
   "created_at":  "2026-06-01T15:00:03Z",
-  "actor_id":    1234567,                // .actor.id
+  "actor_id":    1234567,                // .actor.id (число уже в источнике)
   "actor_login": "octocat",              // .actor.login
   "repo_id":     9876543,                // .repo.id
-  "repo_name":   "octocat/Hello-World",  // .repo.name
-  "org_id":      null,                   // .org.id (может отсутствовать)
-  "language":    "",                     // не приходит из события; заполняется отдельным обогащением
-  "payload_size": 512,                   // длина .payload в байтах (грубая метрика активности)
-  "ref":         "refs/heads/main"       // .payload.ref, где применимо (PushEvent/CreateEvent), иначе ""
+  "repo_name":   "octocat/Hello-World",  // .repo.name — всегда в форме owner/name
+  "org_id":      null,                   // .org.id — есть примерно у 14% событий
+  "language":    "",                     // в событии отсутствует; заполняется обогащением (4.3)
+  "payload_size": 512,                   // длина .payload в байтах; несопоставима между эпохами (ADR 0007)
+  "ref":         "refs/heads/main"       // .payload.ref — только Push/Create/DeleteEvent, иначе ""
 }
 ```
 
-**Особенности данных GitHub:**
+**Особенности данных GitHub** (проверено на реальных часах архива, см. [ADR 0007](adr/0007-hybrid-data-epochs.md)):
 - `WatchEvent` — это звезда (star). GitHub так и не переименовал этот тип события;
-  `payload.action` всегда `"started"`. Основа эндпоинта trending.
-- `PushEvent.payload`: `{push_id, size, distinct_size, ref, head, before, commits:[...]}`.
-- `PullRequestEvent.payload`: `{action, number, pull_request:{...}}`; `action` ∈ opened/closed/…
-- `ForkEvent.payload`: `{forkee:{...}}`. `IssuesEvent.payload`: `{action, issue:{...}}`.
-- `language` в событии отсутствует — его нет в GH Archive. Поле заполняется отдельным обогащением
-  через GitHub API; до обогащения `language=''`, и эндпоинты с фильтром по языку работают по
-  обогащённому подмножеству.
+  `payload.action` всегда `"started"` (194 из 194 в проверенном часе). Основа эндпоинта trending.
+- **Форма `PushEvent.payload` зависит от эпохи.** До октября 2025:
+  `{push_id, size, distinct_size, ref, head, before, repository_id, commits:[...]}`. После —
+  `{push_id, ref, head, before, repository_id}`: `commits`, `size` и `distinct_size` GitHub больше
+  не отдаёт. Коллектор нормализует обе формы; поля, которых нет в новой, не обязательны.
+- `PullRequestEvent.payload`: `{action, number, pull_request:{...}}`, у части событий добавляются
+  `label`/`labels`/`assignee`/`assignees` — набор ключей не фиксирован.
+- `ForkEvent.payload`: `{action, forkee:{...}}`. `IssuesEvent.payload`: `{action, issue:{...}}`
+  (плюс те же необязательные `label`/`assignee`).
+- `ref` есть в payload у `PushEvent`, `CreateEvent` и `DeleteEvent`; у остальных типов его нет.
+- `language` в событии отсутствует — ни на верхнем уровне, ни в payload. Даже там, где поле есть
+  структурно (`ForkEvent.payload.forkee.language`), GitHub отдаёт `null`. Заполняется отдельным
+  обогащением через GitHub API; до обогащения `language=''`, и эндпоинты с фильтром по языку
+  работают по обогащённому подмножеству.
+- `org` присутствует не всегда — в проверенном часе у 20 842 событий из 149 565 (13.9%). Отсюда
+  `Nullable(UInt64)` для `org_id`.
 - Файлы Archive — по часам UTC: `https://data.gharchive.org/YYYY-MM-DD-H.json.gz` (H = 0..23, без
-  ведущего нуля). Объём часа ~1–3 млн событий (в будни/дневное время США — больше).
+  ведущего нуля). **Объём часа зависит от эпохи:** ~150 тыс. событий (20 МБ gz) в 2026 против
+  ~257 тыс. (140 МБ gz) в 2024 — подробности и причина в [ADR 0007](adr/0007-hybrid-data-epochs.md).
 
 ### ClickHouse — сырые события
 

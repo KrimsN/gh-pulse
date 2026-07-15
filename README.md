@@ -215,6 +215,7 @@ uv run pre-commit run --all-files
 - [0004 — At-least-once доставка, идемпотентные вставки](docs/adr/0004-at-least-once-delivery-idempotent-inserts.md)
 - [0005 — Портфолио-артефакт, а не личный инструмент](docs/adr/0005-portfolio-over-personal-tool.md)
 - [0006 — structlog для структурированного логирования](docs/adr/0006-structlog-for-logging.md)
+- [0007 — Гибридная стратегия данных: бэкфилл до октября 2025, live-поток из настоящего](docs/adr/0007-hybrid-data-epochs.md)
 
 ## Производительность
 

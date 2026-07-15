@@ -30,7 +30,7 @@
 
 | # | Задача | Сервис | Статус |
 |---|---|---|---|
-| 1.1 | Осмотреть реальный час GH Archive; решить схему по реальным данным | — | ☐ |
+| 1.1 | Осмотреть реальный час GH Archive; решить схему по реальным данным | — | ☑ |
 | 1.2 | Миграция таблицы ClickHouse `events` (MergeTree, PARTITION, ORDER BY, кодеки) | infra | ☐ |
 | 1.3 | Go-коллектор: fetch GH Archive → стрим-декод gzip → нормализация | gh-collector | ☐ |
 | 1.4 | Go-коллектор: Kafka-продюсер, воркер-пул, graceful shutdown, backpressure | gh-collector | ☐ |
