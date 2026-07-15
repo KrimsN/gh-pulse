@@ -22,6 +22,40 @@ repos:
         files: ^services/pulse-api/
         stages: [pre-commit, pre-push]
 
+      # Go-сервис живёт в своём модуле, поэтому линтер запускается из его каталога: golangci-lint
+      # ищет и .golangci.yml, и границы модуля относительно рабочего каталога, а из корня
+      # репозитория (где go.mod нет) он просто не найдёт, что проверять.
+      #
+      # Проверка формата здесь же: gofmt включён в секции formatters конфига, и `run` сообщает о
+      # неотформатированном коде обычной находкой. Отдельного хука на gofmt нет намеренно — как нет
+      # и хука на `go vet`: govet входит в стандартный набор golangci-lint, и дублировать его
+      # значило бы получать одну и ту же находку дважды.
+      #
+      # language: system, а не golang — тот же принцип, что у mypy выше: берём инструмент, уже
+      # стоящий у разработчика (README → «Dev-зависимости»), вместо того чтобы pre-commit собирал
+      # свою копию golangci-lint из исходников в изолированном окружении на несколько минут.
+      - id: golangci-lint
+        name: golangci-lint (gh-collector)
+        entry: bash -c 'cd services/gh-collector && golangci-lint run'
+        language: system
+        pass_filenames: false
+        files: ^services/gh-collector/
+        types_or: [go, yaml]
+        stages: [pre-commit, pre-push]
+
+      # Тесты — только на pre-push. На pre-commit они бы платились временем за каждый промежуточный
+      # коммит, а ловят ровно то, что всё равно обязано быть зелёным к моменту пуша (`main` зелёный
+      # на каждый пуш — критерий выхода Фазы 0). -race не роскошь: коллектор конкурентный, а гонки
+      # воспроизводятся не на каждом прогоне, и дешевле поймать их здесь, чем мигающим CI.
+      - id: go-test
+        name: go test -race (gh-collector)
+        entry: bash -c 'cd services/gh-collector && go test -race ./...'
+        language: system
+        pass_filenames: false
+        files: ^services/gh-collector/
+        types: [go]
+        stages: [pre-push]
+
       # Локальные рабочие заметки автора живут в репозитории, но версионируются отдельно от кода и
       # в общую историю не уходят. Хук — страховка от случайного `git add .`.
       # Раньше это были ручные скрипты в .git/hooks/{pre-commit,pre-push}; перенесены сюда, т. к.

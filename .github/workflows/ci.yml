@@ -63,7 +63,7 @@ jobs:
       - run: uv run pytest
 
   go-build-test:
-    name: go vet + go test
+    name: golangci-lint + go test
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -82,17 +82,18 @@ jobs:
           # зависимости (Kafka-клиент) — включить обратно вместе с cache-dependency-path.
           cache: false
 
-      # gofmt не имеет режима проверки с ненулевым кодом возврата: -l печатает имена
-      # неотформатированных файлов и молча выходит с нулём. Поэтому падаем по непустому выводу сами.
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "Не отформатировано gofmt:"; echo "$unformatted"; exit 1
-          fi
-
       - run: go build ./...
-      - run: go vet ./...
+
+      # Тот же golangci-lint и тот же services/gh-collector/.golangci.yml, что и в pre-commit-хуке:
+      # прогон в CI обязан совпадать с локальным, иначе хук перестают воспринимать всерьёз.
+      # Отдельных шагов gofmt и go vet здесь нет намеренно — оба входят в golangci-lint (gofmt через
+      # секцию formatters, govet в стандартном наборе линтеров).
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # Держим синхронно с версией в README → «Dev-зависимости»: разъехавшиеся версии линтера
+          # дают находки в CI, которых нет локально, — худший способ узнать о правиле.
+          version: v2.12.2
+          working-directory: services/gh-collector
 
       # -race: коллектор — конкурентный код (fetch в одной горутине, потребление в другой), а гонки
       # проявляются не на каждом прогоне. Тесты не ходят в сеть: HTTP-путь проверяется httptest'ом.
