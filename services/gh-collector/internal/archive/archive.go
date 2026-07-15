@@ -97,7 +97,10 @@ func FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) erro
 	if err != nil {
 		return fmt.Errorf("fetch %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	// Ошибку закрытия глушим осознанно, а не по недосмотру: тело только читается, и его Close
+	// сообщает лишь о сбое возврата соединения в пул — сделать с этим на выходе из функции нечего,
+	// а подменять ею настоящую ошибку чтения (её возвращаем ниже) было бы прямым вредом.
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("fetch %s: unexpected status %s", url, resp.Status)
@@ -107,7 +110,9 @@ func FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) erro
 	if err != nil {
 		return fmt.Errorf("open gzip stream for %s: %w", url, err)
 	}
-	defer gz.Close()
+	// Close у gzip.Reader не дочитывает поток и не проверяет CRC (это делает Read), а лишь
+	// освобождает декомпрессор — возвращать отсюда нечего.
+	defer func() { _ = gz.Close() }()
 
 	// path.Base(url), а не hour.Format("...-15"): формат с датой всегда даёт двузначный час
 	// ("...-09"), а URLForHour час без ведущего нуля ("...-9") — метка в логе обязана совпадать

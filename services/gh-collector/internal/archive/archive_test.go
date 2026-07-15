@@ -63,7 +63,7 @@ func TestDecodeLinesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("открыть фикстуру: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Без буфера и в отдельной горутине: decodeLines и чтение из out идут конкурентно, поэтому
 	// корректность не зависит от того, сколько событий во фикстуре — при вызове decodeLines

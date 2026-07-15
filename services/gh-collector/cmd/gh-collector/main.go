@@ -60,7 +60,10 @@ func run() error {
 
 	hour, err := parseHour(*hourFlag)
 	if err != nil {
-		return fmt.Errorf("%w: разбор --hour: %v", errUsage, err)
+		// Два %w, а не %w + %v: Go 1.20+ умеет заворачивать несколько ошибок сразу. errUsage нужен
+		// main для кода возврата 2, но и причина от parseHour должна остаться доступной errors.Is —
+		// с %v она превратилась бы в текст и перестала быть ошибкой.
+		return fmt.Errorf("%w: разбор --hour: %w", errUsage, err)
 	}
 
 	// SIGINT отменяет корневой context: FetchHour остановится на текущей строке, не пытаясь
