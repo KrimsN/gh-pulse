@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # CI пинит экшены по SHA, а не по тегу (см. комментарий в .github/workflows/ci.yml) — Dependabot
+  # умеет обновлять именно закреплённый SHA, поднося PR с человекочитаемой версией в комментарии.
+  # Без этого пины молча отстают от актуальных релизов без единого сигнала.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
