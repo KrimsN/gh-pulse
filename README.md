@@ -1,6 +1,6 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/KrimsN/gh-pulse/ci.yml?branch=main&label=CI)](https://github.com/KrimsN/gh-pulse/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Python](https://img.shields.io/badge/python-3.13%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 
 # GH Pulse
@@ -124,8 +124,8 @@ sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin d
 sudo usermod -aG docker "$USER"   # перелогиниться, чтобы применилось
 
 # Go (пакет в apt обычно устаревший — ставим бинарник с go.dev)
-curl -LO https://go.dev/dl/go1.23.4.linux-amd64.tar.gz   # проверить актуальную версию на go.dev/dl
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.23.4.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.25.0.linux-amd64.tar.gz   # проверить актуальную версию на go.dev/dl
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
 
 # golangci-lint — официальный скрипт ставит готовый бинарник. Через `go install` не ставим:
