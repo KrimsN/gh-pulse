@@ -76,6 +76,7 @@ curl localhost:8000/health
 ```
 
 Поднимает ClickHouse, PostgreSQL, Redpanda, Redis, Prometheus и Grafana вместе с сервисами проекта.
+Топики `gh.events` и `gh.events.dlq` создаются при старте — досоздавать руками ничего не нужно.
 Полный список портов и переменных окружения — в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#порты-и-переменные-окружения).
 
 ## Dev-зависимости
@@ -234,6 +235,7 @@ CI не находил того, чего не находит локальный
 - [0005 — Портфолио-артефакт, а не личный инструмент](docs/adr/0005-portfolio-over-personal-tool.md)
 - [0006 — structlog для структурированного логирования](docs/adr/0006-structlog-for-logging.md)
 - [0007 — Гибридная стратегия данных: бэкфилл до октября 2025, live-поток из настоящего](docs/adr/0007-hybrid-data-epochs.md)
+- [0008 — Дизайн топика gh.events: ключ event_id, шесть партиций, retention по времени](docs/adr/0008-gh-events-topic-design.md)
 
 ## Производительность
 

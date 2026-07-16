@@ -27,7 +27,7 @@ flowchart LR
     end
 
     subgraph Шина
-        K[(Redpanda / Kafka<br/>topic: gh.events)]
+        K[(Redpanda / Kafka<br/>topic: gh.events<br/>6 партиций, ключ event_id)]
     end
 
     subgraph "pulse-consumer (Python)"
@@ -109,10 +109,39 @@ POSTGRES_DSN=postgresql://ghpulse:ghpulse@postgres:5432/ghpulse
 KAFKA_BROKERS=redpanda:9092
 KAFKA_TOPIC=gh.events
 KAFKA_DLQ_TOPIC=gh.events.dlq
+KAFKA_TOPIC_PARTITIONS=6           # потолок параллельности консьюмера; уменьшить потом нельзя
+KAFKA_TOPIC_RETENTION_MS=86400000  # 24ч — максимально допустимый простой консьюмера
 REDIS_URL=redis://redis:6379/0
 GITHUB_TOKEN=            # для live-поллинга Events API; для GH Archive не нужен
 LOG_LEVEL=INFO
 ```
+
+### Топики шины событий
+
+Создаются автоматически при `docker compose up` одноразовым контейнером `redpanda-init`
+(`infra/redpanda/create-topics.sh`) — ручных шагов не требуется. Обоснование каждой строки таблицы,
+включая измеренный перекос по кандидатам на ключ, — [ADR 0008](adr/0008-gh-events-topic-design.md).
+
+| | `gh.events` | `gh.events.dlq` |
+|---|---|---|
+| Назначение | основной поток событий | битые сообщения (dead-letter) |
+| Ключ сообщения | `event_id` | `event_id` |
+| Партиции | 6 | 1 |
+| Репликация | 1 (одна нода в dev-стеке) | 1 |
+| `cleanup.policy` | `delete` | `delete` |
+| `retention.ms` | 86 400 000 (24 ч) | 604 800 000 (7 суток) |
+| `retention.bytes` | не задан | не задан |
+| `compression.type` | `zstd` | `zstd` |
+| `message.timestamp.type` | `LogAppendTime` | `LogAppendTime` |
+
+Ключ `event_id` даёт равномерность по построению: значения уникальны, поэтому раскладка не зависит
+от того, как меняется состав потока. Измеренный перекос — 1.005 и 1.012 на часах из разных эпох
+данных против 1.717 у `actor_id`, где один бот даёт 13% событий часа.
+
+Retention ограничен временем и намеренно не ограничен размером: лимит по размеру — единственный
+механизм, способный удалить непрочитанное при живом консьюмере, то есть молча нарушить at-least-once
+([ADR 0004](adr/0004-at-least-once-delivery-idempotent-inserts.md)). Отсюда правило: **максимально
+допустимый простой консьюмера равен `retention.ms`**.
 
 ## Модель данных
 
