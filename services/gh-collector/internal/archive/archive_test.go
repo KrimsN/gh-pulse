@@ -91,7 +91,7 @@ func TestDecodeLinesGolden(t *testing.T) {
 	out := make(chan model.Event)
 	var decodeErr error
 	go func() {
-		decodeErr = c.decodeLines(context.Background(), f, "test", out)
+		decodeErr = c.decodeLines(t.Context(), f, "test", out)
 		close(out)
 	}()
 
@@ -185,7 +185,7 @@ func TestDecodeLinesSkipsBrokenLine(t *testing.T) {
 	out := make(chan model.Event) // без буфера, decodeLines в отдельной горутине — см. комментарий в TestDecodeLinesGolden
 	var decodeErr error
 	go func() {
-		decodeErr = c.decodeLines(context.Background(), bytes.NewBufferString(input), "test", out)
+		decodeErr = c.decodeLines(t.Context(), bytes.NewBufferString(input), "test", out)
 		close(out)
 	}()
 
@@ -206,7 +206,7 @@ func TestDecodeLinesSkipsBrokenLine(t *testing.T) {
 func TestDecodeLinesRespectsCancellation(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // отменяем заранее — имитируем SIGINT, пришедший до старта чтения
 
 	input := `{"id":"1","type":"WatchEvent","actor":{"id":1,"login":"a"},"repo":{"id":1,"name":"a/b"},"payload":{},"created_at":"2026-01-01T00:00:00Z"}` + "\n"
@@ -243,7 +243,7 @@ func TestDecodeLinesBlocksOnFullChannel(t *testing.T) {
 	out := make(chan model.Event, 1) // буфер на одно событие — переполняется сразу после первого чтения
 	done := make(chan error, 1)
 	go func() {
-		done <- c.decodeLines(context.Background(), strings.NewReader(b.String()), "test", out)
+		done <- c.decodeLines(t.Context(), strings.NewReader(b.String()), "test", out)
 	}()
 
 	// Вычитываем ровно одно событие — буфер снова полон (decodeLines успела положить туда
@@ -299,7 +299,7 @@ func TestFetchHourHTTP(t *testing.T) {
 	out := make(chan model.Event, 16)
 	var fetchErr error
 	go func() {
-		fetchErr = c.FetchHour(context.Background(), time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC), out)
+		fetchErr = c.FetchHour(t.Context(), time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC), out)
 		close(out)
 	}()
 
@@ -330,7 +330,7 @@ func TestFetchHourNotFound(t *testing.T) {
 	c.baseURL = srv.URL
 
 	out := make(chan model.Event, 1)
-	err := c.FetchHour(context.Background(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), out)
+	err := c.FetchHour(t.Context(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), out)
 	if err == nil {
 		t.Fatal("ожидалась ошибка на 404, получен nil")
 	}

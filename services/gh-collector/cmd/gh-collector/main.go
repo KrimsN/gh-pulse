@@ -43,6 +43,20 @@ const (
 	// не масштабируется от --workers: переполнение канала — это давление на consumer'а
 	// (producer.Producer.Produce), а не на количество одновременных fetch-воркеров, так что
 	// больше воркеров не требует большего буфера для того, чтобы backpressure сработал корректно.
+	//
+	// Неявная связь с franz-go, которую стоит иметь в виду при изменении любой из двух констант:
+	// --shutdown-timeout (см. defaultShutdownTimeout ниже) по факту ограничивает только
+	// producer.Producer.Flush в конце orchestrate, а не сам drain-цикл ("for evt := range events")
+	// — prod.Produce там вызывается с produceCtx = context.WithoutCancel(ctx), который никогда не
+	// станет Done. Сегодня это безопасно только потому, что eventQueueSize (1000) заведомо меньше
+	// kgo.MaxBufferedRecords (дефолт 10000 в franz-go, см. доккомментарий Producer.Produce в
+	// internal/producer/producer.go): канал events исчерпается и закроется раньше, чем успеет
+	// заполниться внутренний буфер клиента Kafka. Если бы буфер клиента переполнился первым, вызов
+	// Produce внутри drain-цикла заблокировался бы без какого-либо таймаута — drain-цикл завис бы
+	// на неопределённое время уже после SIGINT, до всякого Flush. Если один из двух конкретных
+	// чисел когда-нибудь изменится (заводить их за это в один флаг/переменную сейчас смысла нет —
+	// это разные слои: bounded-канал между стадиями и внутренний буфер клиента), эту гарантию нужно
+	// будет пересмотреть заново, а не считать её вечной.
 	eventQueueSize = 1000
 
 	defaultMetricsAddr     = ":9469"
@@ -114,7 +128,24 @@ func run(args []string) error {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
 
-	brokers := strings.Split(*kafkaBrokers, ",")
+	// TrimSpace на каждый элемент и отбрасывание пустых — иначе "a, b" (обычный способ написать
+	// список через запятую, с пробелом после разделителя) дал бы ["a", " b"] с ведущим пробелом в
+	// адресе брокера, а --kafka-brokers "" дал бы [""] — непустой срез длины 1, который проходит
+	// мимо проверки producer.New на len(cfg.Brokers)==0 и падает позже с менее понятной сетевой
+	// ошибкой вместо явного errUsage здесь.
+	//
+	// strings.SplitSeq, а не strings.Split: результат разбора здесь только проходится циклом и
+	// нигде не нужен как срез целиком (ни индексация, ни len до цикла) — SplitSeq не аллоцирует
+	// промежуточный []string под весь список брокеров.
+	var brokers []string
+	for b := range strings.SplitSeq(*kafkaBrokers, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			brokers = append(brokers, b)
+		}
+	}
+	if len(brokers) == 0 {
+		return fmt.Errorf("%w: --kafka-brokers должен содержать хотя бы один непустой адрес брокера", errUsage)
+	}
 
 	// Свой Registry, а не prometheus.DefaultRegisterer: последний — процессный глобал, и запуск
 	// нескольких run() в одном процессе (тесты) паниковал бы на повторной регистрации одних и тех
@@ -310,22 +341,36 @@ func orchestrate(ctx context.Context, archiveClient fetcher, prod *producer.Prod
 	// часам, задача 1.4).
 	fetchGroup, fetchCtx := errgroup.WithContext(ctx)
 	fetchGroup.SetLimit(cfg.workers)
-	for _, hour := range cfg.hours {
-		// Захват hour по значению — не нужен отдельный hour := hour: начиная с Go 1.22 (этот
-		// модуль — go 1.25 в go.mod) переменная цикла for создаётся заново на каждой итерации,
-		// и замыкание ниже не может увидеть значение из чужой итерации, как было в более старых
-		// версиях языка.
-		fetchGroup.Go(func() error {
-			return archiveClient.FetchHour(fetchCtx, hour, events)
-		})
-	}
 
-	// close(events) — в отдельной горутине, синхронизированной через fetchDone: продюсерский цикл
-	// ниже просто делает "for range events" и не обязан ничего знать про errgroup. Канал закрывает
-	// тот, кто точно знает, что закончили все отправители разом (fetchGroup.Wait()), — сама
-	// archive.Client.FetchHour закрывать его не может и не должна (см. её доккомментарий).
+	// Диспетчеризация (fetchGroup.Go на каждый час), fetchGroup.Wait() и close(events) — всё в одной
+	// отдельной горутине, а НЕ в теле orchestrate, как было раньше (и приводило к дедлоку на любом
+	// реальном --backfill). Причина в самом errgroup: Go (см. исходник golang.org/x/sync/errgroup
+	// v0.13.0, версия зафиксирована в go.mod) при исчерпанном лимите SetLimit блокируется СИНХРОННО
+	// в вызывающей горутине на семафоре (`g.sem <- token{}`), пока какая-то из уже запущенных задач
+	// не освободит слот, вернувшись из f(). Если бы цикл диспетчеризации оставался в теле orchestrate,
+	// а drain-цикл ("for evt := range events" ниже) стартовал только после него, — все cfg.workers
+	// горутин FetchHour зависли бы на отправке в events (eventQueueSize=1000 заведомо меньше одного
+	// часа дампа — 100k+ событий, а читателя канала ещё нет), ни одна из них не смогла бы вернуться
+	// из f() и освободить слот в семафоре, а (workers+1)-й вызов fetchGroup.Go заблокировался бы
+	// навечно в ожидании этого освобождения — тотальный дедлок при len(cfg.hours) > cfg.workers.
+	// Вынося диспетчер в отдельную горутину, мы даём drain-циклу в теле orchestrate стартовать сразу
+	// и вычитывать events конкурентно с диспатчем и с работой воркеров — цикл ожидания разрывается.
+	//
+	// Продюсерский цикл ниже при этом по-прежнему просто делает "for range events" и не обязан
+	// ничего знать про errgroup: канал закрывает тот, кто точно знает, что закончили все отправители
+	// разом (fetchGroup.Wait()), — сама archive.Client.FetchHour закрывать его не может и не должна
+	// (см. её доккомментарий).
 	fetchDone := make(chan error, 1)
 	go func() {
+		for _, hour := range cfg.hours {
+			// Захват hour по значению — не нужен отдельный hour := hour: начиная с Go 1.22 (этот
+			// модуль — go 1.25 в go.mod) переменная цикла for создаётся заново на каждой итерации,
+			// и замыкание ниже не может увидеть значение из чужой итерации, как было в более старых
+			// версиях языка.
+			fetchGroup.Go(func() error {
+				return archiveClient.FetchHour(fetchCtx, hour, events)
+			})
+		}
 		fetchDone <- fetchGroup.Wait()
 		close(events)
 	}()
@@ -410,7 +455,11 @@ func parseHour(s string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("час должен быть числом, получено %q", parts[3])
 	}
-	if hour < 0 || hour > 23 {
+	// Только верхняя граница: parts[3] получен из strings.Split(s, "-") и физически не может
+	// начинаться с "-" (минус сам — разделитель, на котором строка уже разрезана), поэтому
+	// strconv.Atoi(parts[3]) выше никогда не вернёт отрицательное число — проверка hour < 0 была бы
+	// недостижимой веткой.
+	if hour > 23 {
 		return time.Time{}, fmt.Errorf("час должен быть в диапазоне 0..23, получено %d", hour)
 	}
 

@@ -35,7 +35,7 @@ func TestStickyKeyPartitionerIsDeterministic(t *testing.T) {
 	key := []byte("12660541189") // реальный event_id из internal/archive/testdata/sample_hour.jsonl
 	rec := &kgo.Record{Key: key}
 	first := partitioner.Partition(rec, partitions)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if got := partitioner.Partition(rec, partitions); got != first {
 			t.Fatalf("партиционер вернул разные партиции для одного и того же ключа: %d и %d", first, got)
 		}
@@ -46,7 +46,7 @@ func TestStickyKeyPartitionerIsDeterministic(t *testing.T) {
 	// проверки выше «партиция стабильна» прошла бы и для сломанного партиционера, всегда
 	// возвращающего 0, — тест не отличал бы «хэширует» от «не хэширует вовсе».
 	seen := map[int]bool{}
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		p := partitioner.Partition(&kgo.Record{Key: []byte(strconv.Itoa(i))}, partitions)
 		seen[p] = true
 	}
@@ -63,12 +63,14 @@ func TestStickyKeyPartitionerIsDeterministic(t *testing.T) {
 func startRedpanda(t *testing.T) string {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	container, err := redpanda.Run(ctx, "redpandadata/redpanda:v24.2.4")
 	if err != nil {
 		t.Fatalf("запустить контейнер redpanda: %v", err)
 	}
 	t.Cleanup(func() {
+		// НЕ t.Context() — он уже отменён к моменту вызова Cleanup-функций, а контейнер обязан
+		// реально успеть остановиться, а не оборваться на середине запроса к Docker.
 		if err := container.Terminate(context.Background()); err != nil {
 			t.Logf("остановить контейнер redpanda: %v", err)
 		}
@@ -86,7 +88,7 @@ func startRedpanda(t *testing.T) string {
 // в этом тестовом контейнере поднят без WithAutoCreateTopics — так же, как реальный продюсер не
 // должен полагаться на auto_create_topics_enabled брокера, см. комментарий к ensureTopicExists).
 func TestNewFailsWhenTopicMissing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	broker := startRedpanda(t)
 	const topic = "gh.events.missing"
 
@@ -118,7 +120,7 @@ func TestNewFailsWhenTopicMissing(t *testing.T) {
 // партициями — теми же параметрами, что и redpanda-init в infra/redpanda/create-topics.sh,
 // только напрямую, без шелл-скрипта, ради простоты теста.
 func TestProduceDeliversWithEventIDKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	broker := startRedpanda(t)
 	const topic = "gh.events"
 

@@ -283,12 +283,14 @@ func (f *pacedFetcher) FetchHour(ctx context.Context, _ time.Time, out chan<- mo
 func startTestRedpanda(t *testing.T) string {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	container, err := redpanda.Run(ctx, "redpandadata/redpanda:v24.2.4")
 	if err != nil {
 		t.Fatalf("запустить контейнер redpanda: %v", err)
 	}
 	t.Cleanup(func() {
+		// НЕ t.Context() — он отменяется до вызова Cleanup-функций (таков контракт t.Context()),
+		// а Terminate обязан реально дойти до Docker и остановить контейнер, а не оборваться сразу.
 		if err := container.Terminate(context.Background()); err != nil {
 			t.Logf("остановить контейнер redpanda: %v", err)
 		}
@@ -309,6 +311,135 @@ func startTestRedpanda(t *testing.T) string {
 	}
 
 	return broker
+}
+
+// overflowFetcher — тестовый fetcher для TestOrchestrateDispatchDoesNotDeadlockWhenHoursExceedWorkers.
+// В отличие от pacedFetcher, здесь намеренно нет никакой синхронизации с тестом (нет "sent"-сигнала):
+// цель не контролировать темп извне, а как можно быстрее отправить в out больше eventsPerHour
+// событий, чем вмещает eventQueueSize, — воспроизводя условие настоящего часа GH Archive (100k+
+// событий против буфера в 1000), при котором дедлок из orchestrate (см. её доккомментарий про
+// errgroup.Go) фактически проявляется. EventID собран из часа и порядкового номера события, чтобы
+// часы не пересекались по event_id и тест мог проверить, что событие каждого часа реально долетело.
+type overflowFetcher struct {
+	eventsPerHour int
+}
+
+func (f *overflowFetcher) FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) error {
+	base := uint64(hour.Unix()) * 1_000_000
+	for i := range f.eventsPerHour {
+		evt := model.Event{
+			EventID:   base + uint64(i),
+			EventType: "WatchEvent",
+			CreatedAt: hour.Add(time.Duration(i) * time.Millisecond),
+			RepoID:    1,
+			RepoName:  "a/b",
+		}
+		select {
+		case out <- evt:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// TestOrchestrateDispatchDoesNotDeadlockWhenHoursExceedWorkers — регрессионный тест на дедлок
+// диспетчеризации errgroup.Go, описанный в доккомментарии orchestrate.
+//
+// errgroup.Go (golang.org/x/sync/errgroup v0.13.0, версия зафиксирована в go.mod) при исчерпанном
+// лимите SetLimit блокируется СИНХРОННО в вызывающей горутине на семафоре, пока какая-нибудь уже
+// запущенная задача не освободит слот, вернувшись из f(). Раньше цикл диспетчеризации
+// ("for _, hour := range cfg.hours { fetchGroup.Go(...) }") шёл в той же горутине, что и последующий
+// drain-цикл ("for evt := range events"), а не конкурентно с ним. При len(cfg.hours) > cfg.workers
+// это вело к тотальному дедлоку: fetch-воркеры в полёте блокировались на отправке в переполненный
+// events (буфер eventQueueSize=1000 меньше одного часа), читателя ещё не было, ни один из них не мог
+// освободить слот в семафоре, а попытка запустить следующую по счёту часовую задачу зависала
+// навечно. TestOrchestrateGracefulShutdownFlushesReadEvents эту ветку не ловил: там hours=1,
+// workers=1 — ровно тот единственный случай, где дедлока в принципе быть не может (нет
+// (workers+1)-й задачи, которую нужно было бы диспетчеризовать).
+//
+// Сценарий здесь — hours=3, workers=1, каждый час отдаёт заведомо больше eventQueueSize событий: до
+// фикса дедлок ловится по таймауту select ниже (тест падает по t.Fatal, а не зависает вечно — сам
+// пакет testing прервёт процесс своим собственным таймаутом, только когда автор забудет и это, но
+// внутренний select здесь даёт куда более информативное сообщение об ошибке раньше). После фикса
+// orchestrate обязана реально завершиться и доставить в Kafka все события всех трёх часов.
+func TestOrchestrateDispatchDoesNotDeadlockWhenHoursExceedWorkers(t *testing.T) {
+	broker := startTestRedpanda(t)
+
+	// Заведомо больше eventQueueSize (1000): без этого запаса даже дедлочащая версия кода прошла бы
+	// тест — при workers=1 диспетчеризация в буггованном коде фактически последовательна, и пока
+	// один час помещается в буфер канала целиком, FetchHour успевает вернуться и освободить
+	// семафор до того, как понадобится читатель. Дедлок проявляется только когда одиночный
+	// fetch-воркер физически не может дописать все свои события в канал без параллельного читателя.
+	const eventsPerHour = eventQueueSize + 500
+
+	hours := []time.Time{
+		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 1, 1, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 1, 2, 0, 0, 0, time.UTC),
+	}
+
+	prodMetrics := producer.NewMetrics(prometheus.NewRegistry())
+	prod, err := producer.New(t.Context(), producer.Config{Brokers: []string{broker}, Topic: "gh.events"}, prodMetrics, nil)
+	if err != nil {
+		t.Fatalf("producer.New: %v", err)
+	}
+	defer prod.Close()
+
+	f := &overflowFetcher{eventsPerHour: eventsPerHour}
+
+	orchestrateDone := make(chan error, 1)
+	go func() {
+		orchestrateDone <- orchestrate(t.Context(), f, prod, pipelineConfig{
+			hours:           hours,
+			workers:         1,
+			sampleN:         0,
+			shutdownTimeout: 30 * time.Second,
+		}, io.Discard, io.Discard)
+	}()
+
+	select {
+	case err := <-orchestrateDone:
+		if err != nil {
+			t.Fatalf("orchestrate вернула ошибку: %v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("orchestrate не завершилась за 60с — похоже на дедлок диспетчеризации errgroup.Go " +
+			"при len(hours) > workers (см. доккомментарий orchestrate про перенос диспетчера в " +
+			"отдельную горутину)")
+	}
+
+	// Проверяем содержимое топика напрямую (как и в TestOrchestrateGracefulShutdownFlushesReadEvents):
+	// нам нужно убедиться, что дошли события ВСЕХ трёх часов, а не только первого, который до фикса
+	// как раз и был единственным, что успевал стартовать.
+	consumer, err := kgo.NewClient(kgo.SeedBrokers(broker), kgo.ConsumeTopics("gh.events"))
+	if err != nil {
+		t.Fatalf("собрать consumer-клиент: %v", err)
+	}
+	defer consumer.Close()
+
+	fetchCtx, cancelFetch := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelFetch()
+
+	want := len(hours) * eventsPerHour
+	got := map[uint64]bool{}
+	for len(got) < want {
+		fetches := consumer.PollFetches(fetchCtx)
+		if err := fetches.Err(); err != nil {
+			t.Fatalf("poll fetches: %v (доставлено %d/%d)", err, len(got), want)
+		}
+		fetches.EachRecord(func(r *kgo.Record) {
+			var evt model.Event
+			if err := json.Unmarshal(r.Value, &evt); err != nil {
+				t.Fatalf("Unmarshal записи из Kafka: %v", err)
+			}
+			got[evt.EventID] = true
+		})
+	}
+	if len(got) != want {
+		t.Fatalf("в Kafka долетело %d событий, ожидалось ровно %d (по одному разу на event_id всех трёх часов)",
+			len(got), want)
+	}
 }
 
 // TestOrchestrateGracefulShutdownFlushesReadEvents — сквозной тест на самый труднопроверяемый
@@ -342,7 +473,7 @@ func TestOrchestrateGracefulShutdownFlushesReadEvents(t *testing.T) {
 	}
 
 	prodMetrics := producer.NewMetrics(prometheus.NewRegistry())
-	prod, err := producer.New(context.Background(), producer.Config{Brokers: []string{broker}, Topic: "gh.events"}, prodMetrics, nil)
+	prod, err := producer.New(t.Context(), producer.Config{Brokers: []string{broker}, Topic: "gh.events"}, prodMetrics, nil)
 	if err != nil {
 		t.Fatalf("producer.New: %v", err)
 	}
@@ -350,7 +481,10 @@ func TestOrchestrateGracefulShutdownFlushesReadEvents(t *testing.T) {
 
 	f := &pacedFetcher{events: events, sent: make(chan struct{})}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// context.WithCancel, а не просто t.Context(): здесь нужен ручной cancel() посреди теста —
+	// имитация SIGINT в конкретный момент (после readBeforeCancel событий), а не отмена по
+	// завершении теста, которую и так даёт t.Context() как страховку.
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	orchestrateDone := make(chan error, 1)
@@ -363,7 +497,7 @@ func TestOrchestrateGracefulShutdownFlushesReadEvents(t *testing.T) {
 		}, io.Discard, io.Discard)
 	}()
 
-	for i := 0; i < readBeforeCancel; i++ {
+	for i := range readBeforeCancel {
 		select {
 		case <-f.sent:
 		case <-time.After(10 * time.Second):
@@ -390,7 +524,7 @@ func TestOrchestrateGracefulShutdownFlushesReadEvents(t *testing.T) {
 	}
 	defer consumer.Close()
 
-	fetchCtx, cancelFetch := context.WithTimeout(context.Background(), 15*time.Second)
+	fetchCtx, cancelFetch := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancelFetch()
 
 	got := map[uint64]bool{}
