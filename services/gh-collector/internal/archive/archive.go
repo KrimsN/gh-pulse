@@ -18,37 +18,16 @@ import (
 	"path"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 )
 
-// baseURL — шаблон адреса почасового дампа GH Archive. Не константа, а переменная: тесты
-// подменяют её на адрес httptest.Server, чтобы проверить HTTP-путь (включая 404) без похода
-// в реальную сеть.
-var baseURL = "https://data.gharchive.org"
-
-// httpClient — свой *http.Client, а не http.DefaultClient: последний — изменяемый пакетный
-// глобал, который любой другой код в этом же процессе может подменить или использовать с другими
-// ожиданиями по таймаутам.
-//
-// У клиента намеренно нет общего Timeout: он покрывает всё время запроса вместе с телом ответа,
-// а час 2024 года — это больше гигабайта, который легально качается несколько минут даже на
-// быстрой сети — общий Timeout оборвал бы такую закачку на середине. Вместо этого ограничены
-// только фазы установления соединения и заголовков: если сервер не отвечает вовсе, воркер (в
-// задаче 1.4 — из воркер-пула продюсера) не зависает на нём навсегда, но само тело потом читается
-// без ограничения по времени — ровно так, как FetchHour и должен работать со стримом.
-var httpClient = &http.Client{
-	Transport: &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout: 10 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-	},
-}
+// defaultBaseURL — шаблон адреса почасового дампа GH Archive.
+const defaultBaseURL = "https://data.gharchive.org"
 
 // maxLineSize — верхняя граница длины одной строки JSON Lines в дампе. bufio.Scanner под неё
-// выделяет буфер не сразу целиком: старт — 64 КБ (см. NewScanner ниже), и Scanner растит его
+// выделяет буфер не сразу целиком: старт — 64 КБ (см. NewClient ниже), и Scanner растит его
 // удвоением по мере необходимости вплоть до этого потолка — восемь мегабайт это верхняя граница,
 // а не разовая аллокация. Реальные события GH Archive умещаются в единицы-десятки килобайт
 // (самый большой замеченный — ForkEvent с вложенным repo, ~5.4 КБ, см. testdata/sample_hour.jsonl),
@@ -56,12 +35,112 @@ var httpClient = &http.Client{
 // «редкий большой payload», а вероятную порчу потока, и обрабатывается как фатальная (см. decodeLines).
 const maxLineSize = 8 * 1024 * 1024
 
+// Metrics — Prometheus-метрики пакета. Отдельная структура, а не пакетные счётчики: Client
+// принимает *Metrics явно (как и логгер), поэтому тесты и несколько воркеров worker pool задачи
+// 1.4 не толкаются за один и тот же prometheus.DefaultRegisterer, и повторная регистрация одних и
+// тех же метрик в нескольких тестах не паникует.
+type Metrics struct {
+	FetchErrors  prometheus.Counter
+	LinesSkipped prometheus.Counter
+}
+
+// NewMetrics создаёт и регистрирует метрики пакета в reg. Вызывать один раз на процесс —
+// повторная регистрация тех же имён в том же Registerer паникует (это осознанное поведение
+// библиотеки prometheus/client_golang, а не баг: задвоенные метрики молча искажали бы дашборд).
+func NewMetrics(reg prometheus.Registerer) *Metrics {
+	m := &Metrics{
+		FetchErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gh_collector_fetch_errors_total",
+			Help: "Число часов GH Archive, которые не удалось скачать и разобрать целиком " +
+				"(сеть, HTTP-статус не 200, битый gzip, либо строка JSON Lines длиннее maxLineSize).",
+		}),
+		LinesSkipped: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gh_collector_lines_skipped_total",
+			Help: "Число строк JSON Lines, пропущенных как битые. Одна битая строка не проваливает " +
+				"разбор всего часа — считает, сколько их было, для наблюдаемости качества дампа.",
+		}),
+	}
+	reg.MustRegister(m.FetchErrors, m.LinesSkipped)
+	return m
+}
+
+// incFetchErrors и incLinesSkipped — nil-safe инкременты. Метод на нулевом (nil) указателе —
+// валидный приём в Go, пока тело метода не разыменовывает поля: он позволяет тестам, которым
+// метрики не нужны, передавать в NewClient nil вместо настройки Registry, не роняя программу
+// проверкой на nil на каждом вызывающем месте (это не то же самое, что паника от вызова метода на
+// nil-интерфейсе — здесь получатель нулевой указатель конкретного типа *Metrics, а не интерфейс).
+func (m *Metrics) incFetchErrors() {
+	if m == nil {
+		return
+	}
+	m.FetchErrors.Inc()
+}
+
+func (m *Metrics) incLinesSkipped() {
+	if m == nil {
+		return
+	}
+	m.LinesSkipped.Inc()
+}
+
+// Client скачивает часы GH Archive. Раньше (задача 1.3) это были пакетные глобалы (baseURL,
+// httpClient, log.Printf) — их пришлось свернуть в структуру по двум причинам: воркер-пул задачи
+// 1.4 запускает несколько часов конкурентно и им нужно разделяемое, но явно переданное состояние
+// (общий httpClient — да, общий логгер и метрики — да), а тесты подменяли baseURL пакетной
+// переменной с восстановлением через defer, что несовместимо с t.Parallel() (параллельные тесты
+// делят один и тот же глобал и гонятся за его значением). Client вместо этого создаётся с нужным
+// baseURL один раз на тест/на процесс — никакого общего мутируемого состояния между вызовами.
+type Client struct {
+	baseURL    string
+	httpClient *http.Client
+	logger     *log.Logger
+	metrics    *Metrics
+}
+
+// NewClient строит Client для скачивания GH Archive. metrics и logger можно передать nil:
+// metrics тогда молчит (см. incFetchErrors/incLinesSkipped выше), logger — заменяется на
+// log.Default(), то же поведение, что было у пакетного log.Printf в задаче 1.3.
+func NewClient(metrics *Metrics, logger *log.Logger) *Client {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Client{
+		baseURL:    defaultBaseURL,
+		httpClient: newHTTPClient(),
+		logger:     logger,
+		metrics:    metrics,
+	}
+}
+
+// newHTTPClient строит *http.Client, а не отдаёт http.DefaultClient: последний — изменяемый
+// пакетный глобал, который любой другой код в этом же процессе может подменить или использовать с
+// другими ожиданиями по таймаутам.
+//
+// У клиента намеренно нет общего Timeout: он покрывает всё время запроса вместе с телом ответа,
+// а час 2024 года — это больше гигабайта, который легально качается несколько минут даже на
+// быстрой сети — общий Timeout оборвал бы такую закачку на середине. Вместо этого ограничены
+// только фазы установления соединения и заголовков: если сервер не отвечает вовсе, воркер из
+// worker pool продюсера (задача 1.4) не зависает на нём навсегда, но само тело потом читается без
+// ограничения по времени — ровно так, как FetchHour и должен работать со стримом.
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: 10 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+}
+
 // URLForHour строит адрес дампа для часа в UTC. GH Archive не дополняет час ведущим нулём —
 // используем %d, а не %02d: иначе 2026-06-01 9:00 превратился бы в несуществующий файл
 // "...-09.json.gz" вместо настоящего "...-9.json.gz".
-func URLForHour(hour time.Time) string {
+func (c *Client) URLForHour(hour time.Time) string {
 	h := hour.UTC()
-	return fmt.Sprintf("%s/%04d-%02d-%02d-%d.json.gz", baseURL, h.Year(), int(h.Month()), h.Day(), h.Hour())
+	return fmt.Sprintf("%s/%04d-%02d-%02d-%d.json.gz", c.baseURL, h.Year(), int(h.Month()), h.Day(), h.Hour())
 }
 
 // FetchHour стримит события одного часа GH Archive в out. Останавливается по ctx: как только
@@ -73,28 +152,30 @@ func URLForHour(hour time.Time) string {
 // часа не существует), битый gzip-заголовок, либо одна строка JSON Lines длиннее maxLineSize
 // (см. decodeLines — это единственный вид "битой строки", который не логируется и не
 // пропускается, а прерывает весь час). Остальные повреждённые строки JSON логируются и
-// пропускаются — одна такая строка не должна проваливать чтение всего часа.
+// пропускаются — одна такая строка не должна проваливать чтение всего часа. Каждый фатальный
+// сбой (кроме отмены ctx — это штатная остановка, а не сбой) увеличивает Metrics.FetchErrors.
 //
 // out — канал с семантикой backpressure, которую задаёт вызывающий код: если консьюмер (в 1.4 —
-// воркер-пул продюсера Kafka) не успевает вычитывать события, отправка в out блокируется, и
-// FetchHour просто перестаёт качать данные из сети быстрее, чем их можно обработать. Никакой
-// внутренней неограниченной буферизации здесь нет и не должно быть.
+// продюсер Kafka) не успевает вычитывать события, отправка в out блокируется, и FetchHour просто
+// перестаёт качать данные из сети быстрее, чем их можно обработать. Никакой внутренней
+// неограниченной буферизации здесь нет и не должно быть.
 //
 // FetchHour не закрывает out — это осознанное отступление от идиомы «отправитель закрывает
-// канал»: закрытие остаётся на вызывающем коде. В задаче 1.4 несколько вызовов FetchHour (по
-// одному на час бэкфилла) будут писать в один общий канал воркер-пула продюсера, и закрыть его
-// сможет только тот, кто знает, что закончили все отправители разом (например, через
-// sync.WaitGroup вокруг всех вызовов) — сама FetchHour этого не знает и знать не должна.
-func FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) error {
-	url := URLForHour(hour)
+// канал»: закрытие остаётся на вызывающем коде. Несколько вызовов FetchHour (по одному на час
+// бэкфилла, задача 1.4) пишут в один общий канал воркер-пула продюсера, и закрыть его может
+// только тот, кто знает, что закончили все отправители разом (см. errgroup.Group в
+// cmd/gh-collector/main.go) — сама FetchHour этого не знает и знать не должна.
+func (c *Client) FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) error {
+	url := c.URLForHour(hour)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("build request for %s: %w", url, err)
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		c.metrics.incFetchErrors()
 		return fmt.Errorf("fetch %s: %w", url, err)
 	}
 	// Ошибку закрытия глушим осознанно, а не по недосмотру: тело только читается, и его Close
@@ -103,11 +184,13 @@ func FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) erro
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		c.metrics.incFetchErrors()
 		return fmt.Errorf("fetch %s: unexpected status %s", url, resp.Status)
 	}
 
 	gz, err := gzip.NewReader(resp.Body)
 	if err != nil {
+		c.metrics.incFetchErrors()
 		return fmt.Errorf("open gzip stream for %s: %w", url, err)
 	}
 	// Close у gzip.Reader не дочитывает поток и не проверяет CRC (это делает Read), а лишь
@@ -118,13 +201,15 @@ func FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) erro
 	// ("...-09"), а URLForHour час без ведущего нуля ("...-9") — метка в логе обязана совпадать
 	// с именем реально запрошенного файла, чтобы по логу можно было грепнуть тот же файл руками.
 	label := path.Base(url)
-	if err := decodeLines(ctx, gz, label, out); err != nil {
+	if err := c.decodeLines(ctx, gz, label, out); err != nil {
 		// Отмена ctx во время сетевого чтения тоже всплывает сюда (http.Transport обрывает
 		// соединение по ctx.Done()) — в этом случае возвращаем именно ctx.Err(), чтобы вызывающий
-		// код видел штатную остановку, а не произвольную ошибку чтения потока.
+		// код видел штатную остановку, а не произвольную ошибку чтения потока. Метрику
+		// FetchErrors в этом случае не трогаем: отмена — не сбой.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		c.metrics.incFetchErrors()
 		return fmt.Errorf("%s: %w", url, err)
 	}
 	return nil
@@ -149,7 +234,7 @@ func FetchHour(ctx context.Context, hour time.Time, out chan<- model.Event) erro
 // выбор в пользу простоты и предсказуемости, а не полноты — при реальных объёмах события GH Archive
 // (единицы-десятки КБ, см. maxLineSize) строка такой длины означает порчу потока, а не большой
 // payload, и трактуется как фатальный сбой всего часа.
-func decodeLines(ctx context.Context, r io.Reader, label string, out chan<- model.Event) error {
+func (c *Client) decodeLines(ctx context.Context, r io.Reader, label string, out chan<- model.Event) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
@@ -166,7 +251,8 @@ func decodeLines(ctx context.Context, r io.Reader, label string, out chan<- mode
 
 		evt, err := model.ParseGitHubEvent(line)
 		if err != nil {
-			log.Printf("archive: час %s, строка %d: пропускаю битое событие: %v", label, lineNum, err)
+			c.metrics.incLinesSkipped()
+			c.logger.Printf("archive: час %s, строка %d: пропускаю битое событие: %v", label, lineNum, err)
 			continue
 		}
 

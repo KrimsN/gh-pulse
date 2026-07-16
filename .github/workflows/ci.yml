@@ -65,7 +65,12 @@ jobs:
   go-build-test:
     name: golangci-lint + go test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 минут хватало, пока тесты были httptest-only. С задачи 1.4 internal/producer и
+    # cmd/gh-collector поднимают настоящий брокер Redpanda через testcontainers-go (см. комментарий
+    # к go test -race ниже) — на ubuntu-latest Docker уже есть, но первый прогон тянет образ
+    # redpandadata/redpanda и testcontainers/ryuk с нуля, а несколько тестов поднимают контейнер
+    # каждый по отдельности. 20 минут — запас на холодный кэш образов, не обычное время прогона.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: services/gh-collector
@@ -77,10 +82,12 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: services/gh-collector/go.mod
-          # Кэш выключен намеренно: коллектор stdlib-only, go.sum не существует — кэшировать нечего,
-          # а setup-go по умолчанию ищет go.sum и спотыкается о его отсутствие. Появятся
-          # зависимости (Kafka-клиент) — включить обратно вместе с cache-dependency-path.
-          cache: false
+          # Кэш снова включён: задача 1.4 добавила первые внешние зависимости (franz-go,
+          # prometheus/client_golang, testcontainers-go...), и go.sum теперь существует. До этого
+          # коллектор был stdlib-only, кэшировать было нечего, а setup-go по умолчанию ищет go.sum
+          # и спотыкается о его отсутствие — отсюда была cache: false.
+          cache: true
+          cache-dependency-path: services/gh-collector/go.sum
 
       - run: go build ./...
 
@@ -95,8 +102,11 @@ jobs:
           version: v2.12.2
           working-directory: services/gh-collector
 
-      # -race: коллектор — конкурентный код (fetch в одной горутине, потребление в другой), а гонки
-      # проявляются не на каждом прогоне. Тесты не ходят в сеть: HTTP-путь проверяется httptest'ом.
+      # -race: коллектор — конкурентный код (worker pool fetch-часов, producer-цикл, errgroup), а
+      # гонки проявляются не на каждом прогоне. HTTP-путь GH Archive проверяется httptest'ом —
+      # сети GitHub тесты не касаются. internal/producer и cmd/gh-collector, наоборот, поднимают
+      # настоящий Redpanda через testcontainers-go (проект не мокает датасторы, см. CLAUDE.md) —
+      # ubuntu-latest даёт Docker из коробки, отдельная настройка не нужна.
       - run: go test -race ./...
 
   docker-smoke:

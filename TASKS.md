@@ -33,7 +33,7 @@
 | 1.1 | Осмотреть реальный час GH Archive; решить схему по реальным данным | — | ☑ |
 | 1.2 | Миграция таблицы ClickHouse `events` (MergeTree, PARTITION, ORDER BY, кодеки) | infra | ☑ |
 | 1.3 | Go-коллектор: fetch GH Archive → стрим-декод gzip → нормализация | gh-collector | ☑ |
-| 1.4 | Go-коллектор: Kafka-продюсер, воркер-пул, graceful shutdown, backpressure | gh-collector | ☐ |
+| 1.4 | Go-коллектор: Kafka-продюсер, воркер-пул, graceful shutdown, backpressure | gh-collector | ☑ |
 | 1.5 | Дизайн топика `gh.events` + ADR по ключу партиционирования | infra | ☑ |
 | 1.6 | Python-консьюмер: aiokafka → батч-вставка → ClickHouse (at-least-once) | pulse-consumer | ☐ |
 | 1.7 | Бэкфилл 10M+ событий через реальный путь | — | ☐ |

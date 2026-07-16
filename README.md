@@ -90,7 +90,7 @@ curl localhost:8000/health
 |---|---|
 | [Git](https://git-scm.com/) | Клонирование, ветвление |
 | [Docker Engine](https://docs.docker.com/engine/) + Compose plugin | `docker compose up` — парадная дверь репозитория |
-| [Go](https://go.dev/) 1.23+ | `services/gh-collector` |
+| [Go](https://go.dev/) 1.25+ | `services/gh-collector` |
 | [golangci-lint](https://golangci-lint.run/) 2.12+ | Линтер `gh-collector`; запускается git-хуками и в CI |
 | [Python](https://www.python.org/) 3.13+ и [uv](https://docs.astral.sh/uv/) | `services/pulse-consumer`, `services/pulse-api`, `bench/`, скрипты |
 

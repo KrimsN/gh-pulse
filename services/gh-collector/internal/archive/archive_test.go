@@ -8,13 +8,26 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 )
 
+// newTestClient строит Client для тестов: metrics=nil (тестам метрики не нужны, см. nil-safe
+// инкременты в archive.go), logger=nil (значит log.Default() — тесты его не проверяют). Каждый
+// вызов возвращает независимый экземпляр, поэтому тесты, меняющие baseURL под конкретный
+// httptest.Server, не делят состояние друг с другом и безопасны под t.Parallel() — в отличие от
+// прежней пакетной переменной baseURL с восстановлением через defer.
+func newTestClient() *Client {
+	return NewClient(nil, nil)
+}
+
 func TestURLForHour(t *testing.T) {
+	t.Parallel()
+
 	// Табличный тест на форматирование адреса. Ключевой нюанс — час без ведущего нуля
 	// (GH Archive пишет "...-9.json.gz", а не "...-09.json.gz"), остальное — обычный %04d/%02d.
 	tests := []struct {
@@ -44,9 +57,11 @@ func TestURLForHour(t *testing.T) {
 		},
 	}
 
+	c := newTestClient()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := URLForHour(tt.hour); got != tt.want {
+			t.Parallel()
+			if got := c.URLForHour(tt.hour); got != tt.want {
 				t.Errorf("URLForHour(%v) = %q, want %q", tt.hour, got, tt.want)
 			}
 		})
@@ -59,11 +74,15 @@ func TestURLForHour(t *testing.T) {
 // данных — что маппинг верен на форме, которую GitHub отдаёт на самом деле, а не только на
 // сконструированных вручную примерах.
 func TestDecodeLinesGolden(t *testing.T) {
+	t.Parallel()
+
 	f, err := os.Open("testdata/sample_hour.jsonl")
 	if err != nil {
 		t.Fatalf("открыть фикстуру: %v", err)
 	}
 	defer func() { _ = f.Close() }()
+
+	c := newTestClient()
 
 	// Без буфера и в отдельной горутине: decodeLines и чтение из out идут конкурентно, поэтому
 	// корректность не зависит от того, сколько событий во фикстуре — при вызове decodeLines
@@ -72,7 +91,7 @@ func TestDecodeLinesGolden(t *testing.T) {
 	out := make(chan model.Event)
 	var decodeErr error
 	go func() {
-		decodeErr = decodeLines(context.Background(), f, "test", out)
+		decodeErr = c.decodeLines(context.Background(), f, "test", out)
 		close(out)
 	}()
 
@@ -154,15 +173,19 @@ func TestDecodeLinesGolden(t *testing.T) {
 // TestDecodeLinesSkipsBrokenLine проверяет, что одна битая строка не прерывает разбор остальных —
 // строка логируется и пропускается, а не валит decodeLines целиком (само описание FetchHour).
 func TestDecodeLinesSkipsBrokenLine(t *testing.T) {
+	t.Parallel()
+
 	input := "" +
 		`{"id":"1","type":"WatchEvent","actor":{"id":1,"login":"a"},"repo":{"id":1,"name":"a/b"},"payload":{},"created_at":"2026-01-01T00:00:00Z"}` + "\n" +
 		`this line is not json at all` + "\n" +
 		`{"id":"2","type":"WatchEvent","actor":{"id":2,"login":"b"},"repo":{"id":2,"name":"c/d"},"payload":{},"created_at":"2026-01-01T00:00:01Z"}` + "\n"
 
+	c := newTestClient()
+
 	out := make(chan model.Event) // без буфера, decodeLines в отдельной горутине — см. комментарий в TestDecodeLinesGolden
 	var decodeErr error
 	go func() {
-		decodeErr = decodeLines(context.Background(), bytes.NewBufferString(input), "test", out)
+		decodeErr = c.decodeLines(context.Background(), bytes.NewBufferString(input), "test", out)
 		close(out)
 	}()
 
@@ -181,21 +204,67 @@ func TestDecodeLinesSkipsBrokenLine(t *testing.T) {
 // TestDecodeLinesRespectsCancellation проверяет, что при отменённом ctx decodeLines не блокируется
 // навечно, пытаясь отправить событие в канал без читателя, а сразу возвращает ctx.Err().
 func TestDecodeLinesRespectsCancellation(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // отменяем заранее — имитируем SIGINT, пришедший до старта чтения
 
 	input := `{"id":"1","type":"WatchEvent","actor":{"id":1,"login":"a"},"repo":{"id":1,"name":"a/b"},"payload":{},"created_at":"2026-01-01T00:00:00Z"}` + "\n"
 
+	c := newTestClient()
+
 	out := make(chan model.Event) // без буфера и без читателя — при живом ctx это тест бы завис
-	err := decodeLines(ctx, bytes.NewBufferString(input), "test", out)
+	err := c.decodeLines(ctx, bytes.NewBufferString(input), "test", out)
 	if !errors.Is(err, ctx.Err()) {
 		t.Errorf("decodeLines вернул %v, want %v", err, ctx.Err())
+	}
+}
+
+// TestDecodeLinesBlocksOnFullChannel — прямая проверка backpressure на уровне decodeLines
+// (задача 1.4, критерий приёмки «при остановленном/медленном Kafka память коллектора не растёт
+// безгранично»): decodeLines не имеет собственного внутреннего буфера сверх того, что дал
+// вызывающий код в out. Если консьюмер перестал читать, decodeLines обязана застрять на select
+// внутри цикла, а не копить события где-то ещё, пока канал не примет следующее.
+func TestDecodeLinesBlocksOnFullChannel(t *testing.T) {
+	t.Parallel()
+
+	// Десять строк с запасом — достаточно, чтобы гарантированно упереться в буфер размера 1
+	// и остаться с непрочитанными событиями во входном потоке.
+	var b strings.Builder
+	for i := 1; i <= 10; i++ {
+		b.WriteString(`{"id":"`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`","type":"WatchEvent","actor":{"id":1,"login":"a"},"repo":{"id":1,"name":"a/b"},` +
+			`"payload":{},"created_at":"2026-01-01T00:00:00Z"}` + "\n")
+	}
+
+	c := newTestClient()
+
+	out := make(chan model.Event, 1) // буфер на одно событие — переполняется сразу после первого чтения
+	done := make(chan error, 1)
+	go func() {
+		done <- c.decodeLines(context.Background(), strings.NewReader(b.String()), "test", out)
+	}()
+
+	// Вычитываем ровно одно событие — буфер снова полон (decodeLines успела положить туда
+	// следующее), а читателя для второго уже нет. decodeLines обязана заблокироваться на select
+	// внутри цикла и не завершиться, пока событий во входе ещё много.
+	<-out
+
+	select {
+	case err := <-done:
+		t.Fatalf("decodeLines завершилась (err=%v), хотя канал переполнен и никто больше не читает — "+
+			"backpressure не работает, события буферизуются где-то помимо канала", err)
+	case <-time.After(100 * time.Millisecond):
+		// ожидаемо: decodeLines блокируется на отправке в out, backpressure работает.
 	}
 }
 
 // TestFetchHourHTTP гоняет полный путь FetchHour (HTTP + gzip) против httptest.Server,
 // отдающего ту же фикстуру в сжатом виде — без похода в реальную сеть.
 func TestFetchHourHTTP(t *testing.T) {
+	t.Parallel()
+
 	fixture, err := os.ReadFile("testdata/sample_hour.jsonl")
 	if err != nil {
 		t.Fatalf("прочитать фикстуру: %v", err)
@@ -216,9 +285,10 @@ func TestFetchHourHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restoreBaseURL := baseURL
-	baseURL = srv.URL
-	defer func() { baseURL = restoreBaseURL }()
+	// baseURL — поле экземпляра, созданного этим тестом, а не пакетная переменная: другой
+	// параллельный тест не увидит и не сможет перезаписать это значение.
+	c := newTestClient()
+	c.baseURL = srv.URL
 
 	// FetchHour не закрывает out сама (см. её доккомментарий) — закрываем здесь, в горутине,
 	// сразу после того, как она вернулась. Раньше тест читал из out с "break" на седьмом событии
@@ -229,7 +299,7 @@ func TestFetchHourHTTP(t *testing.T) {
 	out := make(chan model.Event, 16)
 	var fetchErr error
 	go func() {
-		fetchErr = FetchHour(context.Background(), time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC), out)
+		fetchErr = c.FetchHour(context.Background(), time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC), out)
 		close(out)
 	}()
 
@@ -249,17 +319,18 @@ func TestFetchHourHTTP(t *testing.T) {
 // TestFetchHourNotFound проверяет обязательное требование: несуществующий час (404) возвращает
 // ошибку, а не паникует и не зависает.
 func TestFetchHourNotFound(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}))
 	defer srv.Close()
 
-	restoreBaseURL := baseURL
-	baseURL = srv.URL
-	defer func() { baseURL = restoreBaseURL }()
+	c := newTestClient()
+	c.baseURL = srv.URL
 
 	out := make(chan model.Event, 1)
-	err := FetchHour(context.Background(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), out)
+	err := c.FetchHour(context.Background(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), out)
 	if err == nil {
 		t.Fatal("ожидалась ошибка на 404, получен nil")
 	}
