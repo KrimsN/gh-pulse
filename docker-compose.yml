@@ -76,6 +76,32 @@ services:
       timeout: 3s
       retries: 10
 
+  # Топики — часть инфраструктуры, а не побочный эффект первого продюсера: у образа Redpanda нет
+  # хука docker-entrypoint-initdb.d, каким пользуются ClickHouse и PostgreSQL выше, поэтому его роль
+  # играет одноразовый контейнер. Обоснование формы топиков — docs/adr/0008-gh-events-topic-design.md.
+  redpanda-init:
+    image: redpandadata/redpanda:v24.2.4   # тот же образ, что и брокер: rpk уже внутри
+    container_name: ghpulse-redpanda-init
+    networks: [ghpulse]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    # Переопределяются оба: у образа своя ENTRYPOINT-обёртка, и без явного entrypoint её CMD
+    # приехал бы аргументами к скрипту.
+    entrypoint: ["/usr/bin/bash"]
+    command: ["/opt/ghpulse/create-topics.sh"]
+    environment:
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-redpanda:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-gh.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-gh.events.dlq}
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-6}
+      KAFKA_TOPIC_RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS:-86400000}
+    volumes:
+      - ./infra/redpanda:/opt/ghpulse:ro
+    # Дефолт, но записан явно: сервис обязан отработать и выйти. С on-failure неверно созданный
+    # топик дал бы петлю рестартов вместо внятного падения.
+    restart: "no"
+
   redis:
     image: redis:7.4.6-alpine
     container_name: ghpulse-redis
