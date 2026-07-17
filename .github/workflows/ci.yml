@@ -36,6 +36,10 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # python-lint и python-test ставят зависимости из одного uv.lock на одном раннере — без
+          # суффикса оба джоба сохраняли бы кэш под одним ключом и гонялись за правом его записать
+          # (см. FAQ astral-sh/setup-uv про cache key collisions).
+          cache-suffix: python-lint
 
       # Без --all-packages ставится только корень workspace, и mypy не увидит fastapi со товарищи.
       - run: uv sync --all-packages
@@ -67,6 +71,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-suffix: python-test
 
       - run: uv sync --all-packages
       # --cov берёт исходники обоих сервисов явно: pythonpath добавляет их в sys.path (см.
