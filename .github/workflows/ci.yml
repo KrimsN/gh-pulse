@@ -69,7 +69,19 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - run: uv sync --all-packages
-      - run: uv run pytest
+      # --cov берёт исходники обоих сервисов явно: pythonpath добавляет их в sys.path (см.
+      # pyproject.toml), но не в директорию запуска, откуда coverage.py ищет source по умолчанию.
+      - run: uv run pytest --cov=services/pulse-api/app --cov=services/pulse-consumer/consumer --cov-report=lcov:coverage-python.lcov
+
+      - name: Отправить покрытие в Coveralls
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
+        with:
+          # Репозиторий подключён в Coveralls вручную (не через GitHub App), поэтому дефолтного
+          # github.token недостаточно — нужен per-repo токен из секрета.
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          flag-name: python
+          file: coverage-python.lcov
+          parallel: true
 
   go-build-test:
     name: golangci-lint + go test
@@ -116,7 +128,18 @@ jobs:
       # сети GitHub тесты не касаются. internal/producer и cmd/gh-collector, наоборот, поднимают
       # настоящий Redpanda через testcontainers-go (проект не мокает датасторы, см. CLAUDE.md) —
       # ubuntu-latest даёт Docker из коробки, отдельная настройка не нужна.
-      - run: go test -race ./...
+      # -covermode=atomic обязателен вместе с -race: счётчик покрытия по умолчанию (set) не
+      # потокобезопасен, и параллельные тесты дают гонку на самом инструменте покрытия.
+      - run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Отправить покрытие в Coveralls
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
+        with:
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          flag-name: go
+          file: services/gh-collector/coverage.out
+          format: golang
+          parallel: true
 
   docker-smoke:
     name: docker compose up + /health
@@ -141,3 +164,15 @@ jobs:
       - name: Погасить окружение
         if: always()
         run: docker compose down --volumes
+
+  coverage-finish:
+    name: coveralls (finish)
+    runs-on: ubuntu-latest
+    # python-test и go-build-test шлют свои отчёты с parallel: true — Coveralls держит билд
+    # незавершённым, пока не придёт этот сигнал, иначе так и останется "pending" в UI.
+    needs: [python-test, go-build-test]
+    steps:
+      - uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
+        with:
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          parallel-finished: true

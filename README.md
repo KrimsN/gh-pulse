@@ -1,7 +1,15 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/KrimsN/gh-pulse/ci.yml?branch=main&label=CI)](https://github.com/KrimsN/gh-pulse/actions)
+[![Coverage Status](https://coveralls.io/repos/github/KrimsN/gh-pulse/badge.svg?branch=main)](https://coveralls.io/github/KrimsN/gh-pulse?branch=main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Python](https://img.shields.io/badge/python-3.13%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.139%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-24.8-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redpanda](https://img.shields.io/badge/Redpanda-v24.2-E11900)](https://www.redpanda.com/)
+[![Redis](https://img.shields.io/badge/Redis-7.4-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![ruff](https://img.shields.io/badge/ruff-0.15.21-D7FF64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
 
 # GH Pulse
 
