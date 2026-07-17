@@ -1,0 +1,16 @@
+[project]
+name = "pulse-consumer"
+version = "0.1.0"
+description = "Консьюмер gh.events: батч-вставка в ClickHouse с гарантией at-least-once"
+requires-python = ">=3.13"
+dependencies = [
+    "aiokafka[zstd]>=0.14.0",
+    "clickhouse-connect[async]>=1.4.2",
+    "prometheus-client>=0.25.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "structlog>=26.1.0",
+]
+
+[tool.uv]
+package = false

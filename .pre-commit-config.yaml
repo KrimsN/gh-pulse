@@ -22,6 +22,43 @@ repos:
         files: ^services/pulse-api/
         stages: [pre-commit, pre-push]
 
+      - id: mypy-pulse-consumer
+        name: mypy --strict (pulse-consumer)
+        # Отдельный хук, а не общий на оба сервиса разом: у pulse-api и pulse-consumer одинаково
+        # называется пакет тестов (tests/, оба с __init__.py) — единый вызов mypy на оба пути
+        # падает "Duplicate module named tests" (в отличие от pytest, который эту же коллизию
+        # решает через --import-mode=importlib в pyproject.toml).
+        entry: uv run mypy --strict services/pulse-consumer
+        language: system
+        pass_filenames: false
+        files: ^services/pulse-consumer/
+        stages: [pre-commit, pre-push]
+
+      # Тесты — только на pre-push, по тому же принципу, что и go-test ниже: на промежуточный
+      # коммит это лишняя пауза, а зелёными обязаны быть именно к пушу. Отдельный хук на сервис
+      # (а не общий `uv run pytest` на оба сразу через files: обоих путей) — пуш, который трогает
+      # только один сервис, не должен платить временем за тесты другого; `files:` ниже гоняет хук,
+      # только если в пуше реально есть изменения под соответствующим `services/*/`.
+      - id: pytest-pulse-api
+        name: pytest (pulse-api)
+        entry: uv run pytest services/pulse-api/tests
+        language: system
+        pass_filenames: false
+        files: ^services/pulse-api/
+        stages: [pre-push]
+
+      - id: pytest-pulse-consumer
+        name: pytest (pulse-consumer)
+        # Эта конкретная проверка заметно медленнее pytest-pulse-api и требует локального Docker:
+        # test_consumer_integration.py поднимает настоящие Redpanda и ClickHouse через testcontainers
+        # (docs/python-styleguide.md §4.1 — моков для датасторов нет), а не просто гоняет функции в
+        # памяти. Тем весомее причина не запускать её на пуше, который pulse-consumer не касается.
+        entry: uv run pytest services/pulse-consumer/tests
+        language: system
+        pass_filenames: false
+        files: ^services/pulse-consumer/
+        stages: [pre-push]
+
       # Go-сервис живёт в своём модуле, поэтому линтер запускается из его каталога: golangci-lint
       # ищет и .golangci.yml, и границы модуля относительно рабочего каталога, а из корня
       # репозитория (где go.mod нет) он просто не найдёт, что проверять.

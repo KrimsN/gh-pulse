@@ -44,12 +44,21 @@ jobs:
       # исправил бы найденное и вернул успех — линт в CI всегда был бы зелёным.
       - run: uv run ruff check --no-fix .
       - run: uv run ruff format --check .
+      # Раздельные вызовы, не один общий: у обоих сервисов пакет тестов называется одинаково —
+      # tests/ (с __init__.py) — и mypy, в отличие от pytest (см. addopts в pyproject.toml),
+      # не умеет различать два модуля с одинаковым именем в одном инвокейшне («Duplicate module
+      # named "tests"»). pytest эту же коллизию решает через --import-mode=importlib.
       - run: uv run mypy --strict services/pulse-api
+      - run: uv run mypy --strict services/pulse-consumer
 
   python-test:
     name: pytest
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 минут хватало, пока тестов был только pulse-api (httpx/ASGITransport, без датасторов).
+    # test_consumer_integration.py поднимает настоящие Redpanda и ClickHouse через testcontainers
+    # (проект не мокает датасторы, см. CLAUDE.md) — 20 минут — запас на холодный кэш образов, не
+    # обычное время прогона (см. тот же запас у go-build-test).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.0
 

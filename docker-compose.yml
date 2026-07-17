@@ -179,3 +179,33 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  pulse-consumer:
+    build:
+      context: .
+      dockerfile: services/pulse-consumer/Dockerfile
+    container_name: ghpulse-pulse-consumer
+    networks: [ghpulse]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ghpulse}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-redpanda:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-gh.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-gh.events.dlq}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      # Не просто redpanda: service_healthy — топики создаёт одноразовый redpanda-init (ADR 0008).
+      # Консьюмер, стартовавший раньше него, застал бы gh.events автосозданным с одной партицией
+      # вместо шести, и параллельность консьюмера тихо схлопнулась бы.
+      redpanda-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8001/metrics')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

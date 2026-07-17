@@ -35,7 +35,7 @@
 | 1.3 | Go-коллектор: fetch GH Archive → стрим-декод gzip → нормализация | gh-collector | ☑ |
 | 1.4 | Go-коллектор: Kafka-продюсер, воркер-пул, graceful shutdown, backpressure | gh-collector | ☑ |
 | 1.5 | Дизайн топика `gh.events` + ADR по ключу партиционирования | infra | ☑ |
-| 1.6 | Python-консьюмер: aiokafka → батч-вставка → ClickHouse (at-least-once) | pulse-consumer | ☐ |
+| 1.6 | Python-консьюмер: aiokafka → батч-вставка → ClickHouse (at-least-once) | pulse-consumer | ☑ |
 | 1.7 | Бэкфилл 10M+ событий через реальный путь | — | ☐ |
 | 1.8 | Первый эндпоинт `/api/v1/trending` (неоптимизированный — это нормально) | pulse-api | ☐ |
 | 1.9 | **Зафиксировать baseline latency для /trending** | docs | ☐ |

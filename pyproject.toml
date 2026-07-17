@@ -8,7 +8,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["services/pulse-api"]
+members = ["services/pulse-api", "services/pulse-consumer"]
 
 [dependency-groups]
 dev = [
@@ -18,13 +18,20 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "httpx",       # ASGITransport для тестов эндпоинтов без поднятого сервера
+    "testcontainers[clickhouse,kafka]>=4.14.2",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["services/pulse-api/tests"]
-# app не установлен как пакет (package = false), а pytest запускается из корня workspace —
-# без этого `import app` в тестах не резолвится.
-pythonpath = ["services/pulse-api"]
+testpaths = ["services/pulse-api/tests", "services/pulse-consumer/tests"]
+# app/consumer не установлены как пакеты (package = false), а pytest запускается из корня
+# workspace — без этого `import app`/`import consumer` в тестах не резолвится.
+pythonpath = ["services/pulse-api", "services/pulse-consumer"]
+# Оба сервиса называют свой пакет тестов одинаково — tests/. С дефолтным import-mode=prepend
+# это два разных каталога, регистрирующихся в sys.modules под одним и тем же именем "tests":
+# второй пакет, попавший в очередь импорта, ловит ModuleNotFoundError на собственных файлах.
+# importlib импортирует каждый тестовый модуль по пути файла, не полагаясь на глобальный
+# sys.modules — коллизия по имени пакета исчезает без переименования каталогов.
+addopts = ["--import-mode=importlib"]
 asyncio_mode = "auto"
 
 [tool.ruff]
@@ -117,9 +124,9 @@ ignore = [
 "**/tests/**" = ["S101"]  # assert — рабочий инструмент pytest, а не забытая отладка
 
 [tool.ruff.lint.isort]
-# Внутри сервиса ruff определяет `app` как first-party по расположению файла, а в tests/ — уже нет,
-# и импорт уезжал бы в третью сторону. Явно называем корни пакетов.
-known-first-party = ["app"]
+# Внутри сервиса ruff определяет `app`/`consumer` как first-party по расположению файла, а в
+# tests/ — уже нет, и импорт уезжал бы в третью сторону. Явно называем корни пакетов.
+known-first-party = ["app", "consumer"]
 
 [tool.ruff.lint.flake8-quotes]
 docstring-quotes = "double"
@@ -139,4 +146,10 @@ exclude = ["build/", "dist/", "\\.venv/"]
 
 [[tool.mypy.overrides]]
 module = "asyncpg.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# aiokafka и testcontainers не отгружают py.typed / stub-пакеты на момент написания — граница с
+# нетипизированной библиотекой, а не собственный недосмотр (styleguide §2.2).
+module = ["aiokafka.*", "testcontainers.*"]
 ignore_missing_imports = true

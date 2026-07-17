@@ -191,13 +191,16 @@ git --version && docker compose version && go version && golangci-lint --version
 | Проверка | pre-commit | pre-push |
 |---|---|---|
 | `ruff check`, `ruff format`, `mypy --strict` (Python-сервисы) | ✅ | ✅ |
+| `pytest` (`pulse-api`/`pulse-consumer`, только изменённый сервис) | — | ✅ |
 | `golangci-lint run` (`gh-collector`) | ✅ | ✅ |
 | `go test -race` (`gh-collector`) | — | ✅ |
 
 `golangci-lint` включает и `go vet`, и проверку `gofmt` (набор линтеров и обоснование каждого —
 [`services/gh-collector/.golangci.yml`](services/gh-collector/.golangci.yml)), поэтому отдельных
 хуков на них нет. Тесты стоят только на pre-push: на каждый промежуточный коммит они лишняя пауза,
-а зелёными обязаны быть именно к пушу.
+а зелёными обязаны быть именно к пушу. `pytest` для Python-сервисов запускается отдельным хуком на
+каждый — пуш, который трогает только `pulse-api`, не платит временем за testcontainers-тесты
+`pulse-consumer` (реальные Redpanda и ClickHouse), и наоборот.
 
 Установка (один раз после клонирования):
 

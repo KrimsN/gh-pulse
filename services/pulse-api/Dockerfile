@@ -9,14 +9,23 @@ ENV UV_PYTHON_DOWNLOADS=0 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 
 # Слой зависимостей отдельно от кода сервиса — кэшируется, пока pyproject.toml/uv.lock не меняются.
+# Bind-mount pyproject.toml соседнего воркспейс-member'а (pulse-consumer) обязателен: --locked
+# сверяет uv.lock со ВСЕМИ манифестами из [tool.uv.workspace].members в корневом pyproject.toml,
+# даже с --no-install-workspace (который лишь пропускает установку кода воркспейс-пакетов, а не
+# чтение их манифестов). Без него uv не может подтвердить, что лок актуален, и падает с
+# «lockfile needs to be updated», хотя сам он свежий — сам код pulse-consumer в образ не попадает.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=services/pulse-api/pyproject.toml,target=services/pulse-api/pyproject.toml \
+    --mount=type=bind,source=services/pulse-consumer/pyproject.toml,target=services/pulse-consumer/pyproject.toml \
     uv sync --locked --no-install-workspace --no-dev
 
 COPY pyproject.toml uv.lock ./
 COPY services/pulse-api/pyproject.toml services/pulse-api/pyproject.toml
+# Манифест соседнего member'а — та же причина, что у bind-mount выше: --locked проверяет лок против
+# всех members воркспейса. Код pulse-consumer сюда не копируется, только его pyproject.toml.
+COPY services/pulse-consumer/pyproject.toml services/pulse-consumer/pyproject.toml
 COPY services/pulse-api/app services/pulse-api/app
 
 RUN --mount=type=cache,target=/root/.cache/uv \

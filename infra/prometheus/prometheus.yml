@@ -10,3 +10,7 @@ scrape_configs:
   - job_name: pulse-api
     static_configs:
       - targets: ["pulse-api:8000"]
+
+  - job_name: pulse-consumer
+    static_configs:
+      - targets: ["pulse-consumer:8001"]
