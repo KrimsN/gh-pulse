@@ -40,7 +40,7 @@ flowchart TD
     MV3[("activity_hourly_mv")]
 
     GHA --> FETCH
-    GHE -. план 2.9 .-> FETCH
+    GHE -. "план 2.9" .-> FETCH
     FETCH --> NORM --> PROD --> KAFKA
 
     KAFKA --> GETMANY --> SPLIT
