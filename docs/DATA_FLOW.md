@@ -82,33 +82,63 @@ flowchart LR
 
     subgraph api["pulse-api (FastAPI)"]
         TREND["GET /api/v1/trending"]
+        REPO["GET /api/v1/repos/{owner}/{name}"]
+        LANG["GET /api/v1/languages/trends"]
+        HEAT["GET /api/v1/activity/heatmap"]
+        STATS["GET /api/v1/stats"]
         HEALTH["GET /health"]
     end
 
     MV1[("repo_stars_hourly_mv")]
+    MV2[("language_daily_mv")]
+    MV3[("activity_hourly_mv")]
     EVENTS[("ghpulse.events")]
     PG[("PostgreSQL")]
     REDIS[("Redis")]
 
     CLIENT --> TREND
+    CLIENT --> REPO
+    CLIENT --> LANG
+    CLIENT --> HEAT
+    CLIENT --> STATS
     CLIENT --> HEALTH
 
     TREND -- "без фильтра language:<br/>sum(stars) по окну, час-граница" --> MV1
     TREND -- "с фильтром language:<br/>прямой скан events<br/>(в MV нет колонки language)" --> EVENTS
+    REPO -- "totals.stars, stars_by_day" --> MV1
+    REPO -- "resolve owner/name → repo_id;<br/>totals.pushes/forks/issues<br/>(MV под них нет)" --> EVENTS
+    LANG -- "series по дням" --> MV2
+    LANG -- "coverage — честная доля<br/>обогащённых событий за окно" --> EVENTS
+    HEAT -- "профиль за всю историю,<br/>без параметра окна" --> MV3
+    STATS -- "events_total, oldest/newest,<br/>uniq(repo_id)/uniq(actor_id)" --> EVENTS
     HEALTH -- ping --> MV1
     HEALTH -- "SELECT 1" --> PG
     HEALTH -- ping --> REDIS
 ```
 
-`/api/v1/trending` — единственный на сегодня эндпоинт, читающий данные о событиях. Он ветвится на
-два пути в зависимости от параметра `language` ([app/queries.py](../services/pulse-api/app/queries.py)):
+Все пять эндпоинтов, читающих данные о событиях, реализованы поверх соответствующих MV, где это
+возможно ([app/queries.py](../services/pulse-api/app/queries.py)):
 
-- **без фильтра** — читает `repo_stars_hourly_mv`, суммируя уже посчитанные почасовые строки;
-  границы окна округляются к началу часа (`toStartOfHour`), а не считаются с точностью до секунды;
-- **с фильтром `language`** — падает обратно на прямой скан `ghpulse.events`, потому что MV агрегирует
-  только по `(repo_id, hour)` и не хранит язык. Поскольку обогащение языка ещё не запускалось
-  (задача 4.3, измеренное покрытие 0% — [ARCHITECTURE.md](ARCHITECTURE.md#модель-данных)), этот путь
-  пока не встречается в реальном трафике, но обязан отвечать корректно по контракту.
+- **`/api/v1/trending`** ветвится на два пути в зависимости от параметра `language`: без фильтра —
+  читает `repo_stars_hourly_mv`, суммируя уже посчитанные почасовые строки (границы окна
+  округляются к началу часа, `toStartOfHour`, а не считаются с точностью до секунды); с фильтром
+  `language` — падает обратно на прямой скан `ghpulse.events`, потому что MV агрегирует только по
+  `(repo_id, hour)` и не хранит язык.
+- **`/api/v1/repos/{owner}/{name}`** резолвит `owner/name` в `repo_id` прямым сканом `events`
+  (заодно считая `pushes`/`forks`/`issues` — под эти типы событий MV нет), а `totals.stars` и
+  `stars_by_day` берёт из `repo_stars_hourly_mv`. Несуществующий репозиторий → `404`.
+- **`/api/v1/languages/trends`** берёт `series` из `language_daily_mv` (только обогащённые события,
+  `language != ''`), а `coverage` — честную долю обогащённых событий за то же окно — считает прямым
+  запросом к `events`, отдельно от MV: сама MV не видит необогащённые строки и не может сказать,
+  какая доля потока вообще размечена. Пока обогащение не запущено (задача 4.3, измеренное покрытие
+  0% — [ARCHITECTURE.md](ARCHITECTURE.md#модель-данных)), `series` пуст, а `coverage` — `0.0`.
+- **`/api/v1/activity/heatmap`** читает только `activity_hourly_mv` — профиль (день недели × час)
+  за всю историю, без параметра окна: MV не хранит дату, только агрегат, физически не может ответить
+  на «последние N дней». `weekday` в ответе — строка (`monday`…`sunday`), внутри ISO 8601.
+- **`/api/v1/stats`** — единственный эндпоинт без своей MV, читает сводку прямо из `events`
+  (`events_total`, диапазон дат, число уникальных репозиториев/акторов через приближённый `uniq()`).
+  `ingest_lag_seconds` — это `now() - max(created_at)`, свежесть данных в хранилище, а не буквальный
+  лаг Kafka-консьюмера (у `pulse-api` нет клиента Kafka).
 
 `/health` — единственное место, где `pulse-api` сегодня трогает PostgreSQL и Redis: три проверки
 идут параллельно (`asyncio.gather`) и влияют только на поле `deps` ответа. Продуктовых данных через
@@ -118,10 +148,6 @@ PostgreSQL/Redis сейчас не проходит — обе базы подн
 
 | Эндпоинт / механизм | Читал бы | Статус |
 |---|---|---|
-| `GET /api/v1/repos/{owner}/{name}` | `repo_stars_hourly_mv` (равенство по `repo_id`) | план — 2.4 |
-| `GET /api/v1/languages/trends` | `language_daily_mv` | план — 2.4 |
-| `GET /api/v1/activity/heatmap` | `activity_hourly_mv` | план — 2.4 |
-| `GET /api/v1/stats` | `ghpulse.events` (размер корпуса, лаг ingest) | план — 2.4 |
 | `POST/GET /api/v1/reports` | PostgreSQL `saved_reports` | план — 2.5 |
 | Rate limiting и кэш агрегатов | Redis | план — 2.6 |
 | Живой контур ingest | GitHub Events API → `gh-collector` | план — 2.9 |
@@ -160,9 +186,9 @@ sequenceDiagram
 | Kafka `gh.events` | нормализованные события, JSON | `gh-collector` | `pulse-consumer` | 24ч (`retention.ms`) |
 | Kafka `gh.events.dlq` | необработанные сообщения + причина в заголовках | `pulse-consumer` | ручной реплей (не автоматизирован) | 7 суток |
 | ClickHouse `ghpulse.events` | все события с начала бэкфилла | `pulse-consumer` | `pulse-api`, три MV (по триггеру) | без TTL |
-| ClickHouse `repo_stars_hourly_mv` | звёзды по `(repo_id, hour)` | триггер INSERT на `events` | `/api/v1/trending` | без TTL |
-| ClickHouse `language_daily_mv` | события по `(day, language)`, только `language != ''` | триггер INSERT на `events` | план — `/api/v1/languages/trends` | без TTL |
-| ClickHouse `activity_hourly_mv` | события по `(weekday, hour)`, максимум 168 строк | триггер INSERT на `events` | план — `/api/v1/activity/heatmap` | без TTL |
+| ClickHouse `repo_stars_hourly_mv` | звёзды по `(repo_id, hour)` | триггер INSERT на `events` | `/api/v1/trending`, `/api/v1/repos/{owner}/{name}` | без TTL |
+| ClickHouse `language_daily_mv` | события по `(day, language)`, только `language != ''` | триггер INSERT на `events` | `/api/v1/languages/trends` | без TTL |
+| ClickHouse `activity_hourly_mv` | события по `(weekday, hour)`, максимум 168 строк | триггер INSERT на `events` | `/api/v1/activity/heatmap` | без TTL |
 | PostgreSQL | `api_keys`, `saved_reports` | план — `pulse-api` (2.5) | план — `pulse-api` (2.5) | — |
 | Redis | кэш горячих агрегатов, rate limit по ключу | план — `pulse-api` (2.6) | план — `pulse-api` (2.6) | — |
 

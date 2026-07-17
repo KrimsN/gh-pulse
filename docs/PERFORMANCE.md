@@ -111,16 +111,16 @@ Indexes:
   не упал, а время упало → значит измерили не то») сработал и здесь, только для метода измерения
   целиком, а не для конкретного прогона — поэтому в Baseline пошли HTTP-путь эндпоинта и
   `system.query_log`, а не CLI wall time.
-- **`bench_query.py` не запустился напрямую на этой машине** (Windows, Python из `uv`):
-  `subprocess.run(["clickhouse-client", ...], shell=False)` на Windows резолвится через нативный
-  `CreateProcess`, который ищет исполняемый файл только с расширением `.exe` (в отличие от
-  `cmd.exe`, который умеет `PATHEXT`) — ни bash-скрипт без расширения, ни `.cmd`-обёртка над
-  `docker compose exec clickhouse clickhouse-client` не находятся этим путём. Цифры этой записи
-  сняты эквивалентным протоколом вручную (тот же `bench/trending.sql`, серии прогонов, медиана,
-  `rows_read`/`bytes_read` из `--print-profile-events` и `system.query_log`).
+- **[`bench/bench_query.py`](../bench/bench_query.py) не запустился напрямую на этой машине**
+  (Windows, Python из `uv`): `subprocess.run(["clickhouse-client", ...], shell=False)` на Windows
+  резолвится через нативный `CreateProcess`, который ищет исполняемый файл только с расширением
+  `.exe` (в отличие от `cmd.exe`, который умеет `PATHEXT`) — ни bash-скрипт без расширения, ни
+  `.cmd`-обёртка над `docker compose exec clickhouse clickhouse-client` не находятся этим путём.
+  Цифры этой записи сняты эквивалентным протоколом вручную (тот же `bench/trending.sql`, серии
+  прогонов, медиана, `rows_read`/`bytes_read` из `--print-profile-events` и `system.query_log`).
   [`bench/trending.sql`](../bench/trending.sql) остаётся источником правды для запроса и
-  воспроизводим через `bench_query.py` в любом окружении, где `clickhouse-client` есть нативно на
-  `PATH` (Linux/macOS/WSL).
+  воспроизводим через [`bench/bench_query.py`](../bench/bench_query.py) в любом окружении, где
+  `clickhouse-client` есть нативно на `PATH` (Linux/macOS/WSL).
 - **Окно `7d` на этом датасете читает те же 65 055 строк, что и `24h`**: партиция `202607`
   целиком — это ~745K событий за последние ~6 часов (доливка задачи 1.8), более старых данных в
   ней нет. Нынешняя скорость — отчасти артефакт скудности «живого» хвоста датасета, а не только
