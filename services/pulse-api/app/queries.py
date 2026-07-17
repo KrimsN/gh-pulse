@@ -12,14 +12,36 @@ WINDOW_SECONDS: Final[dict[Window, int]] = {"1h": 3600, "24h": 86400, "7d": 6048
 
 
 def build_trending_query(window: Window, language: str | None, limit: int) -> tuple[str, dict[str, object]]:
-    """Строит наивный (неоптимизированный) запрос топа репозиториев по звёздам за окно.
+    """Строит запрос топа репозиториев по звёздам за окно.
 
-    Задача 1.8 — намеренно прямой скан по `events` без materialized view (тот появится в 2.1);
-    это честный baseline для `docs/PERFORMANCE.md` (задача 1.9).
+    Задача 2.3 — читает `repo_stars_hourly_mv` (задача 2.1, бэкфилл — 2.2) вместо прямого скана
+    `events` из baseline 1.8/1.9: агрегат по (repo_id, час) уже посчитан на вставке, запрос суммирует
+    готовые почасовые строки вместо пересчёта сырых `WatchEvent` заново на каждый вызов.
+
+    Ровно один путь остаётся на прямом скане `events` — фильтр по `language`. У
+    `repo_stars_hourly_mv` нет колонки `language` (агрегат по repo_id и часу, языка в этом разрезе
+    нет — см. `002_mv_hourly.sql`), поэтому запрос с этим фильтром падает обратно на baseline 1.8.
+    Пока обогащение языка не запущено (задача 4.3, измеренное покрытие 0%), этот путь не встречается
+    в реальном трафике, но контракт (`docs/ARCHITECTURE.md`) фильтр обещает и обязан отвечать
+    корректно, а не пустотой по недосмотру.
+
+    **Семантика окна для пути через MV изменилась**: границы округляются к началу часа
+    (`toStartOfHour`), а не считаются с точностью до секунды, как в baseline. Это неизбежное
+    следствие часовой грануляции MV, а не недосмотр — пример такого же округления есть уже в самой
+    задаче 2.3 (`TASKS_DETAILED.md`). Худший случай — до 59 мин 59 с лишних (или недостающих) данных
+    на границе окна; на текущем датасете расхождение с точным baseline измерено (см.
+    `docs/PERFORMANCE.md`) и равно нулю, потому что граничный час пуст, но это свойство конкретного
+    снимка данных, а не гарантия на будущее.
+
+    **`ORDER BY stars DESC, repo_id ASC`** — вторичный ключ добавлен в обоих путях при проверке
+    эквивалентности (задача 2.3): на текущих данных десятки репозиториев делят одно и то же число
+    звёзд у границы `LIMIT`, и без вторичного ключа `ClickHouse` возвращал произвольное (и разное
+    между прямым сканом и MV) подмножество этих связок — не баг агрегации, а недетерминированный
+    tie-break, который к тому же делал бы топ нестабильным между двумя одинаковыми запросами подряд.
 
     Args:
         window: Окно агрегации звёзд.
-        language: Опциональный фильтр по языку репозитория (пока пусто у необогащённых строк).
+        language: Опциональный фильтр по языку репозитория; при указании обходит MV.
         limit: Максимум строк в ответе.
 
     Returns:
@@ -27,22 +49,26 @@ def build_trending_query(window: Window, language: str | None, limit: int) -> tu
     """
     parameters: dict[str, object] = {"window_seconds": WINDOW_SECONDS[window], "limit": limit}
 
-    # language_clause — обычная (не f-) строка: её `{language:String}` не должен исполниться как
-    # Python-подстановка, он предназначен clickhouse-connect. Двойные скобки в f-строке ниже — тот же
-    # приём для `{window_seconds:UInt32}` и `{limit:UInt32}`: экранирование f-строки, а не опечатка.
-    language_clause = ""
     if language:
-        language_clause = "AND language = {language:String}"
         parameters["language"] = language
+        query = """
+            SELECT repo_id, any(repo_name) AS repo_name, count() AS stars
+            FROM ghpulse.events
+            WHERE event_type = 'WatchEvent'
+              AND created_at >= now() - INTERVAL {window_seconds:UInt32} SECOND
+              AND language = {language:String}
+            GROUP BY repo_id
+            ORDER BY stars DESC, repo_id ASC
+            LIMIT {limit:UInt32}
+        """
+        return query, parameters
 
-    query = f"""
-        SELECT repo_id, any(repo_name) AS repo_name, count() AS stars
-        FROM ghpulse.events
-        WHERE event_type = 'WatchEvent'
-          AND created_at >= now() - INTERVAL {{window_seconds:UInt32}} SECOND
-          {language_clause}
+    query = """
+        SELECT repo_id, any(repo_name) AS repo_name, sum(stars) AS stars
+        FROM ghpulse.repo_stars_hourly_mv
+        WHERE hour >= toStartOfHour(now() - INTERVAL {window_seconds:UInt32} SECOND)
         GROUP BY repo_id
-        ORDER BY stars DESC
-        LIMIT {{limit:UInt32}}
+        ORDER BY stars DESC, repo_id ASC
+        LIMIT {limit:UInt32}
     """
     return query, parameters

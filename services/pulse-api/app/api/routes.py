@@ -55,10 +55,11 @@ async def trending(
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100, description="Максимум репозиториев в ответе")] = 50,
 ) -> TrendingResponse:
-    """Топ репозиториев по звёздам (`WatchEvent`) за окно — неоптимизированный baseline (задача 1.8).
+    """Топ репозиториев по звёздам (`WatchEvent`) за окно — читает `repo_stars_hourly_mv` (задача 2.3).
 
-    Прямой скан `ghpulse.events` без materialized view — это намеренно: честная медленная точка
-    отсчёта для истории оптимизации в `docs/PERFORMANCE.md` (MV появится в задаче 2.1).
+    Baseline на прямом скане `ghpulse.events` (задача 1.8/1.9, до появления MV в 2.1) зафиксирован
+    в `docs/PERFORMANCE.md` вместе с записью «после» этой оптимизации. Запрос с фильтром `language`
+    остаётся на прямом скане `events` — у MV нет колонки `language` (см. `app/queries.py`).
 
     Args:
         request: Текущий запрос; клиент ClickHouse берётся из `request.app.state`.
