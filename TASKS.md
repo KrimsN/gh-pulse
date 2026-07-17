@@ -38,7 +38,7 @@
 | 1.6 | Python-консьюмер: aiokafka → батч-вставка → ClickHouse (at-least-once) | pulse-consumer | ☑ |
 | 1.7 | Бэкфилл 10M+ событий через реальный путь | — | ☑ |
 | 1.8 | Первый эндпоинт `/api/v1/trending` (неоптимизированный — это нормально) | pulse-api | ☑ |
-| 1.9 | **Зафиксировать baseline latency для /trending** | docs | ☐ |
+| 1.9 | **Зафиксировать baseline latency для /trending** | docs | ☑ |
 
 **Критерий выхода:** события идут Archive→Kafka→ClickHouse; `/trending` отдаёт реальные данные;
 baseline записан.
