@@ -52,13 +52,14 @@ baseline записан.
 | 2.1 | Materialized views для почасовых агрегатов (звёзды, языки, активность) | infra | ☑ |
 | 2.2 | Бэкфилл MV по существующим событиям; сверка счётчиков | — | ☑ |
 | 2.3 | Оптимизировать /trending на MV; записать before/after | docs | ☑ |
-| 2.4 | Остальные эндпоинты: карточка репозитория, тренды языков, heatmap активности, stats | pulse-api | ☐ |
+| 2.4 | Остальные эндпоинты: карточка репозитория, тренды языков, heatmap активности, stats | pulse-api | ☑ |
 | 2.5 | PostgreSQL: api_keys + saved_reports, миграции Alembic | pulse-api | ☐ |
 | 2.6 | Redis: кэш горячих агрегатов + rate limiting по ключу | pulse-api | ☐ |
 | 2.7 | OpenAPI-документация, модели ответов, курсорная пагинация, ETag/Cache-Control | pulse-api | ☐ |
 | 2.8 | Интеграционные тесты: pytest + testcontainers (реальные CH/PG/Kafka) | pulse-consumer, pulse-api | ☐ |
 | 2.9 | Live-путь: поллинг GitHub Events API (ETag, backoff по rate-limit) | gh-collector | ☐ |
 | 2.10 | Тест на восстановление консьюмера после падения (убить в середине батча, проверить отсутствие потерь) | pulse-consumer | ☐ |
+| 2.11 | Строгая валидация query-параметров: 422 на неизвестные поля (все эндпоинты) | pulse-api | ☐ |
 
 **Критерий выхода:** полное API, MV живые, тесты зелёные, real-time лаг < 5 с.
 
