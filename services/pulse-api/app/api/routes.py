@@ -1,11 +1,15 @@
 import asyncio
+from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.config import get_settings
 from app.helpers import probe_dependency
+from app.models import TrendingItem, TrendingResponse, Window
+from app.queries import build_trending_query
 
 router = APIRouter()
 
@@ -40,3 +44,36 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse(
         content=body, status_code=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE
     )
+
+
+@router.get("/api/v1/trending")
+async def trending(
+    request: Request,
+    window: Annotated[Window, Query(description="Окно агрегации звёзд")] = "24h",
+    language: Annotated[
+        str | None, Query(description="Фильтр по языку (работает по обогащённому подмножеству)")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100, description="Максимум репозиториев в ответе")] = 50,
+) -> TrendingResponse:
+    """Топ репозиториев по звёздам (`WatchEvent`) за окно — неоптимизированный baseline (задача 1.8).
+
+    Прямой скан `ghpulse.events` без materialized view — это намеренно: честная медленная точка
+    отсчёта для истории оптимизации в `docs/PERFORMANCE.md` (MV появится в задаче 2.1).
+
+    Args:
+        request: Текущий запрос; клиент ClickHouse берётся из `request.app.state`.
+        window: Окно агрегации звёзд.
+        language: Опциональный фильтр по языку репозитория.
+        limit: Максимум репозиториев в ответе.
+
+    Returns:
+        Топ репозиториев по числу звёзд за окно, отсортированный по убыванию.
+    """
+    query, parameters = build_trending_query(window, language, limit)
+    result = await request.app.state.clickhouse.query(query, parameters=parameters)
+
+    items = [
+        TrendingItem(repo_id=repo_id, repo_name=repo_name, stars=stars, rank=rank)
+        for rank, (repo_id, repo_name, stars) in enumerate(result.result_rows, start=1)
+    ]
+    return TrendingResponse(window=window, generated_at=datetime.now(UTC), items=items)
