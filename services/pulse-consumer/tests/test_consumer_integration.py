@@ -18,7 +18,7 @@ from testcontainers.clickhouse import ClickHouseContainer
 from testcontainers.kafka import RedpandaContainer
 
 from consumer.config import Settings
-from consumer.consumer import SeekOnFirstStart, run
+from consumer.consumer import run
 from consumer.dlq import DlqProducer
 
 if TYPE_CHECKING:
@@ -140,7 +140,7 @@ async def test_consumer_inserts_batch_and_commits_offset(
         enable_auto_commit=False,
         auto_offset_reset="none",
     )
-    consumer.subscribe(topics=[TOPIC], listener=SeekOnFirstStart(consumer))
+    consumer.subscribe(topics=[TOPIC])
     await consumer.start()
 
     dlq_producer = AIOKafkaProducer(bootstrap_servers=bootstrap_servers)

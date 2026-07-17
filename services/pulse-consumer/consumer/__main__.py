@@ -18,7 +18,7 @@ import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from consumer.config import get_settings
-from consumer.consumer import SeekOnFirstStart, run
+from consumer.consumer import run
 from consumer.dlq import DlqProducer
 from consumer.logging_config import configure_logging
 from consumer.metrics import start_metrics_server
@@ -58,14 +58,12 @@ async def _main() -> None:
         stack.push_async_callback(clickhouse.close)
 
         consumer = AIOKafkaConsumer(
+            settings.kafka_topic,
             bootstrap_servers=settings.kafka_brokers,
             group_id=settings.kafka_consumer_group_id,
             enable_auto_commit=False,
             auto_offset_reset="none",
         )
-        # subscribe(), а не topics в конструкторе: конструктор подписывает без листенера, а
-        # SeekOnFirstStart нужен именно на первом рёбалансе (см. его докстринг).
-        consumer.subscribe(topics=[settings.kafka_topic], listener=SeekOnFirstStart(consumer))
         await consumer.start()
         stack.push_async_callback(consumer.stop)
 

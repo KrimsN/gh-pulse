@@ -16,8 +16,8 @@ from collections.abc import Sequence
 
 import structlog
 from aiokafka import AIOKafkaConsumer
-from aiokafka.abc import ConsumerRebalanceListener
-from aiokafka.structs import ConsumerRecord, TopicPartition
+from aiokafka.errors import NoOffsetForPartitionError
+from aiokafka.structs import ConsumerRecord
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import ClickHouseError
 
@@ -28,44 +28,6 @@ from consumer.metrics import BATCH_SIZE, CONSUMER_LAG, EVENTS_CONSUMED, EVENTS_D
 from consumer.model import Event, PoisonMessageError, parse_event
 
 logger = structlog.get_logger()
-
-
-class SeekOnFirstStart(ConsumerRebalanceListener):  # type: ignore[misc]  # aiokafka без py.typed, база видна mypy как Any
-    """При первом ребалансе выставляет позицию на начало партиций без закоммиченного оффсета.
-
-    Консьюмер работает с `auto_offset_reset="none"` (fail-closed, ADR 0008): без явного
-    позиционирования `getmany()` упал бы уже на партициях реально новой группы, у которой оффсета
-    попросту никогда не было. `committed(tp) is None` отличает этот случай от «оффсет был, но
-    просрочен по retention» — второй случай обязан остаться необработанным здесь и падать
-    `OffsetOutOfRangeError` из `getmany()` (см. `run()`), а не быть тихо перепутанным с первым.
-    """
-
-    def __init__(self, consumer: AIOKafkaConsumer) -> None:
-        self._consumer = consumer
-
-    async def on_partitions_assigned(self, assigned: Sequence[TopicPartition]) -> None:
-        need_seek = [tp for tp in assigned if await self._consumer.committed(tp) is None]
-        if not need_seek:
-            return
-
-        # Один батч-вызов на все партиции сразу, а не по одной, чтобы не плодить лишние round-trip'ы.
-        await self._consumer.seek_to_beginning(*need_seek)
-        for tp in need_seek:
-            # seek_to_beginning() внутри лишь уведомляет фоновую задачу фетчера и ждёт её с
-            # таймаутом (aiokafka.consumer.fetcher.Fetcher.request_offset_reset) — сам вызов может
-            # вернуться раньше, чем реальный сброс позиции фактически применится. На топике с
-            # несколькими партициями это давало гонку: getmany() в run() падал
-            # NoOffsetForPartitionError на части партиций, хотя лог уже показывал «успешный» seek.
-            # position() при отсутствующей валидной позиции форсирует её разрешение синхронно —
-            # к моменту возврата из этого коллбэка (после которого координатор считает рёбаланс
-            # завершённым) позиция гарантированно выставлена.
-            await self._consumer.position(tp)
-            logger.info("partition_seeked_to_beginning", topic=tp.topic, partition=tp.partition)
-
-    async def on_partitions_revoked(self, revoked: Sequence[TopicPartition]) -> None:
-        # Оффсеты коммитятся синхронно после каждого успешно вставленного батча (см. run()) — к
-        # моменту ребаланса не остаётся консьюмед-но-незакоммиченного, специальный commit не нужен.
-        del revoked
 
 
 def split_valid(
@@ -154,19 +116,37 @@ async def run(
     просроченный по retention оффсет обязан уронить процесс с понятной ошибкой (ADR 0008), а не
     молча перескочить дыру в данных, которую запрещает ADR 0004.
 
+    `NoOffsetForPartitionError`, наоборот, перехватывается и обрабатывается: с
+    `auto_offset_reset="none"` (ADR 0008) её кидает партиция, у которой оффсета не было НИКОГДА —
+    типично первый когда-либо старт группы на новом топике, а не потеря данных. Раньше это пытался
+    закрыть превентивный `seek_to_beginning()` в листенере рёбаланса, но фоновый таск фетчера
+    (`Fetcher._update_fetch_positions`) поднимает ту же ошибку независимо и может успеть первым —
+    гонка воспроизводилась в CI детерминированно (топик и группа там всегда с нуля) и не
+    воспроизводилась локально (оффсет обычно уже закоммичен с прошлого запуска). Реагировать на уже
+    случившуюся ошибку вместо того, чтобы пытаться её опередить, гонку убирает: `seek_to_beginning()`
+    синхронно снимает именно эту ошибку с партиции (`Fetcher.request_offset_reset` чистит
+    `self._records[tp]` до первого `await`), так что следующий `getmany()` её больше не увидит.
+
     Args:
         consumer: Запущенный `AIOKafkaConsumer` с `enable_auto_commit=False`, уже подписанный на
-            `gh.events` через `SeekOnFirstStart`.
+            `gh.events`.
         clickhouse: Async-клиент ClickHouse.
         dlq: Продюсер dead-letter топика `gh.events.dlq`.
         settings: Настройки батчинга и backoff.
         stop_event: Флаг graceful shutdown — цикл выходит на первой проверке после его установки.
     """
     while not stop_event.is_set():
-        records = await consumer.getmany(
-            timeout_ms=int(settings.batch_max_seconds * 1000),
-            max_records=settings.batch_max_records,
-        )
+        try:
+            records = await consumer.getmany(
+                timeout_ms=int(settings.batch_max_seconds * 1000),
+                max_records=settings.batch_max_records,
+            )
+        except NoOffsetForPartitionError as exc:
+            tp = exc.args[0]
+            await consumer.seek_to_beginning(tp)
+            logger.info("partition_seeked_to_beginning", topic=tp.topic, partition=tp.partition)
+            continue
+
         messages = [message for partition_messages in records.values() for message in partition_messages]
         if not messages:
             await _update_lag_metric(consumer)
