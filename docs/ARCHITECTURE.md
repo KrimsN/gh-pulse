@@ -280,6 +280,10 @@ CREATE TABLE saved_reports (
 CREATE INDEX ix_saved_reports_key ON saved_reports (api_key_id, created_at DESC);
 ```
 
+Схема применяется автоматически при `docker compose up` одноразовым контейнером
+`postgres-migrate` (`alembic upgrade head`, `services/pulse-api/alembic/`) — ручных шагов не
+требуется.
+
 ## API (черновик контракта)
 
 ```

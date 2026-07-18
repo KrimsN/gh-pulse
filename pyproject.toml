@@ -18,7 +18,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "httpx",       # ASGITransport для тестов эндпоинтов без поднятого сервера
-    "testcontainers[clickhouse,kafka]>=4.14.2",
+    "testcontainers[clickhouse,kafka,postgres]>=4.14.2",
     "pytest-cov>=7.1.0",
 ]
 
@@ -58,6 +58,11 @@ exclude = [
     "build",
     "dist",
     "node_modules",
+    # Сгенерированные Alembic ревизии (задача 2.5) — DDL сырым SQL в теле upgrade/downgrade, не
+    # прикладной код сервиса. Каталог намеренно без __init__.py (alembic/ иначе перекрыл бы
+    # site-packages alembic на sys.path, см. комментарий у per-file-ignores env.py), поэтому вместо
+    # разовых INP001-игноров на каждый новый файл ревизии исключаем директорию целиком.
+    "services/pulse-api/alembic/versions",
 ]
 
 [tool.ruff.format]
@@ -132,6 +137,13 @@ ignore = [
 # закрывается при выходе),
 # DOC201 (Returns в докстринге — избыточно для двух однострочных докстрингов на весь файл).
 "bench/*.py" = ["T201", "S404", "S603", "S607", "PLW1510", "SIM115", "DOC201"]
+# app/cli.py — CLI-утилита выпуска API-ключа (задача 2.5), тот же случай, что bench/*.py: печать
+# сырого ключа в stdout — единственный способ его показать оператору, это не забытый debug-print.
+"services/pulse-api/app/cli.py" = ["T201"]
+# alembic/env.py лежит в каталоге без __init__.py (см. exclude выше) — сам файл при этом остаётся
+# обычным модулем, который alembic импортирует по пути, а не через python-пакет `alembic.env`, так
+# что implicit-namespace-package здесь не баг, а форма, которую требует сам alembic.
+"services/pulse-api/alembic/env.py" = ["INP001"]
 
 [tool.ruff.lint.isort]
 # Внутри сервиса ruff определяет `app`/`consumer` как first-party по расположению файла, а в

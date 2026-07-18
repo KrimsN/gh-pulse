@@ -41,6 +41,8 @@ repos:
       # только если в пуше реально есть изменения под соответствующим `services/*/`.
       - id: pytest-pulse-api
         name: pytest (pulse-api)
+        # С задачи 2.5 сюда входит test_postgres_migrations_integration.py — тоже testcontainers,
+        # тоже требует локального Docker (см. тот же принцип у pytest-pulse-consumer ниже).
         entry: uv run pytest services/pulse-api/tests
         language: system
         pass_filenames: false

@@ -84,8 +84,15 @@ curl localhost:8000/health
 ```
 
 Поднимает ClickHouse, PostgreSQL, Redpanda, Redis, Prometheus и Grafana вместе с сервисами проекта.
-Топики `gh.events` и `gh.events.dlq` создаются при старте — досоздавать руками ничего не нужно.
-Полный список портов и переменных окружения — в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#порты-и-переменные-окружения).
+Топики `gh.events` и `gh.events.dlq` и схема PostgreSQL (`api_keys`, `saved_reports`) создаются при
+старте — досоздавать руками ничего не нужно. Полный список портов и переменных окружения — в
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#порты-и-переменные-окружения).
+
+Выпуск API-ключа:
+
+```bash
+docker compose exec pulse-api python -m app.cli create-key --owner "demo" --rate-limit 100
+```
 
 ## Dev-зависимости
 

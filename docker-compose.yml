@@ -46,12 +46,33 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
-      - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ghpulse} -d ${POSTGRES_DB:-ghpulse}"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Одноразовый мигратор схемы Postgres — по образцу redpanda-init ниже: жёсткая зависимость от
+  # postgres:healthy, restart:no, pulse-api ждёт его успешного завершения. Alembic (services/pulse-api/
+  # alembic/, задача 2.5) — единственный источник истины для схемы PostgreSQL, поэтому initdb-том у
+  # postgres выше снят: две параллельные схемы одной и той же базы разошлись бы при первом же
+  # расхождении между ними.
+  postgres-migrate:
+    build:
+      context: .
+      dockerfile: services/pulse-api/Dockerfile
+    container_name: ghpulse-postgres-migrate
+    networks: [ghpulse]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-ghpulse}:${POSTGRES_PASSWORD:-ghpulse}@postgres:5432/${POSTGRES_DB:-ghpulse}
+    command: ["alembic", "upgrade", "head"]
+    # Дефолт, но записан явно, как и у redpanda-init: миграция обязана отработать и выйти, не
+    # переоткрываться в цикле при сбое — с on-failure битая миграция дала бы рестарт-петлю вместо
+    # внятного падения, которое видно в `docker compose ps`.
+    restart: "no"
 
   redpanda:
     image: redpandadata/redpanda:v24.2.4
@@ -172,6 +193,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      postgres-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:

@@ -53,7 +53,7 @@ baseline записан.
 | 2.2 | Бэкфилл MV по существующим событиям; сверка счётчиков | — | ☑ |
 | 2.3 | Оптимизировать /trending на MV; записать before/after | docs | ☑ |
 | 2.4 | Остальные эндпоинты: карточка репозитория, тренды языков, heatmap активности, stats | pulse-api | ☑ |
-| 2.5 | PostgreSQL: api_keys + saved_reports, миграции Alembic | pulse-api | ☐ |
+| 2.5 | PostgreSQL: api_keys + saved_reports, миграции Alembic | pulse-api | ☑ |
 | 2.6 | Redis: кэш горячих агрегатов + rate limiting по ключу | pulse-api | ☐ |
 | 2.7 | OpenAPI-документация, модели ответов, курсорная пагинация, ETag/Cache-Control | pulse-api | ☐ |
 | 2.8 | Интеграционные тесты: pytest + testcontainers (реальные CH/PG/Kafka) | pulse-consumer, pulse-api | ☐ |

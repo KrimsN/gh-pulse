@@ -27,6 +27,11 @@ COPY services/pulse-api/pyproject.toml services/pulse-api/pyproject.toml
 # всех members воркспейса. Код pulse-consumer сюда не копируется, только его pyproject.toml.
 COPY services/pulse-consumer/pyproject.toml services/pulse-consumer/pyproject.toml
 COPY services/pulse-api/app services/pulse-api/app
+# alembic.ini/alembic/ — нужны и самому pulse-api (не только сервису postgres-migrate из
+# docker-compose.yml, задача 2.5): оба используют один образ, а `alembic downgrade`/`upgrade`
+# оператор может запустить и через `docker compose exec pulse-api ...`.
+COPY services/pulse-api/alembic.ini services/pulse-api/alembic.ini
+COPY services/pulse-api/alembic services/pulse-api/alembic
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --package pulse-api
