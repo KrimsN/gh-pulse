@@ -1,9 +1,12 @@
-// cmd/gh-collector — точка входа коллектора. Умеет два режима: один час GH Archive (--hour) или
-// диапазон часов (--backfill ОТ ДО), скачивает их worker pool'ом ограниченной ширины (--workers) и
-// продюсит нормализованные события в Kafka (internal/producer). Между fetch- и produce-стадиями —
-// ограниченный канал: если Kafka не успевает, fetch тормозит сам, вместо того чтобы копить события
-// в памяти без предела (backpressure). SIGINT/SIGTERM останавливают докачку новых часов и флашат
-// уже прочитанные события перед выходом (graceful shutdown) — см. orchestrate ниже.
+// cmd/gh-collector — точка входа коллектора. Умеет три режима: один час GH Archive (--hour),
+// диапазон часов (--backfill ОТ ДО) или живой поллинг GitHub Events API (--live). Backfill-режимы
+// скачивают часы worker pool'ом ограниченной ширины (--workers), live — единственным бесконечным
+// циклом поллинга (internal/events); оба продюсят нормализованные события в Kafka
+// (internal/producer) через тот же паттерн backpressure и graceful shutdown. Между fetch- и
+// produce-стадиями — ограниченный канал: если Kafka не успевает, fetch (или поллинг) тормозит сам,
+// вместо того чтобы копить события в памяти без предела. SIGINT/SIGTERM останавливают докачку
+// новых часов (или новых поллов) и флашат уже прочитанные события перед выходом (graceful
+// shutdown) — см. orchestrate и runLive ниже.
 package main
 
 import (
@@ -27,6 +30,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/archive"
+	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/events"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/producer"
 )
@@ -107,14 +111,31 @@ func run(args []string) error {
 		"адреса брокеров Kafka через запятую (или переменная окружения KAFKA_BROKERS)")
 	kafkaTopic := fs.String("kafka-topic", envOr("KAFKA_TOPIC", "gh.events"),
 		"топик Kafka для событий (или переменная окружения KAFKA_TOPIC); должен существовать заранее, см. ADR 0008")
+	liveFlag := fs.Bool("live", false,
+		"живой поллинг GitHub Events API вместо GH Archive (нужен ровно один режим — --hour, --backfill или --live)")
+	githubToken := fs.String("github-token", envOr("GITHUB_TOKEN", ""),
+		"токен GitHub для --live (или переменная окружения GITHUB_TOKEN); без токена поллинг неаутентифицированный (60 запросов/час вместо 5000)")
 
 	if err := fs.Parse(rest); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
 
-	if isBackfill == (*hourFlag != "") {
-		// Оба режима заданы или ни одного — в обоих случаях неоднозначно, что качать.
-		return fmt.Errorf("%w: нужен ровно один режим — --hour ЧАС или --backfill ОТ ДО", errUsage)
+	// Ровно один режим из трёх: два юридических способа сказать "качать GH Archive" (--hour,
+	// --backfill) плюс --live. isBackfill и *hourFlag!="" уже взаимоисключающие по построению
+	// extractBackfillRange/fs.Parse (--backfill съедает свои позиционные аргументы до разбора
+	// флагов), так что здесь достаточно посчитать, сколько из трёх условий истинно.
+	modesSet := 0
+	if isBackfill {
+		modesSet++
+	}
+	if *hourFlag != "" {
+		modesSet++
+	}
+	if *liveFlag {
+		modesSet++
+	}
+	if modesSet != 1 {
+		return fmt.Errorf("%w: нужен ровно один режим — --hour ЧАС, --backfill ОТ ДО или --live", errUsage)
 	}
 	if *sampleN < 0 {
 		return fmt.Errorf("%w: --sample не может быть отрицательным, получено %d", errUsage, *sampleN)
@@ -123,9 +144,14 @@ func run(args []string) error {
 		return fmt.Errorf("%w: --workers должен быть не меньше 1, получено %d", errUsage, *workers)
 	}
 
-	hours, err := resolveHours(isBackfill, from, to, *hourFlag)
-	if err != nil {
-		return fmt.Errorf("%w: %w", errUsage, err)
+	// hours нужен только не-live режимам — resolveHours() вызывается ниже условно, чтобы --live не
+	// требовал ни --hour, ни --backfill заполненными (у него нет часов вовсе).
+	var hours []time.Time
+	if !*liveFlag {
+		hours, err = resolveHours(isBackfill, from, to, *hourFlag)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errUsage, err)
+		}
 	}
 
 	// TrimSpace на каждый элемент и отбрасывание пустых — иначе "a, b" (обычный способ написать
@@ -154,17 +180,13 @@ func run(args []string) error {
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	archiveMetrics := archive.NewMetrics(reg)
 	producerMetrics := producer.NewMetrics(reg)
-
-	// Остаток X-RateLimit-Remaining GitHub Events API — метрика заведена заранее под задачу 2.9
-	// (живой поллинг Events API). GH Archive, которым качает эта задача, рейт-лимитов не имеет, и
-	// заполнять эту метрику отсюда нечем — значение всегда 0 до 2.9. Ноль здесь не значит "лимит
-	// исчерпан": сама метрика попросту не задействована, пока не появится поллер.
-	reg.MustRegister(prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "gh_collector_github_rate_limit_remaining",
-		Help: "Остаток X-RateLimit-Remaining GitHub Events API. Не заполняется до задачи 2.9 " +
-			"(живой поллинг) — GH Archive рейт-лимитов не имеет. Значение 0 здесь значит " +
-			"«метрика ещё не подключена», а не «лимит исчерпан».",
-	}))
+	// events.NewMetrics регистрирует настоящий Gauge gh_collector_github_rate_limit_remaining —
+	// до этой задачи он был захардкожен нулём прямо здесь (заглушка "метрика ещё не подключена",
+	// GH Archive рейт-лимитов не имеет). Регистрируем безусловно, а не только в ветке --live: в
+	// backfill-режиме Client.Run никогда не запускается, и Gauge просто остаётся на нулевом
+	// значении, тем же способом, каким и раньше сигнализировал "не задействован", — но теперь это
+	// поведение настоящего, а не притворного Gauge.
+	eventsMetrics := events.NewMetrics(reg)
 
 	metricsServer := &http.Server{Addr: *metricsAddr, Handler: metricsHandler(reg)}
 	go func() {
@@ -184,14 +206,25 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	archiveClient := archive.NewClient(archiveMetrics, nil)
-
 	prod, err := producer.New(ctx, producer.Config{Brokers: brokers, Topic: *kafkaTopic}, producerMetrics, nil)
 	if err != nil {
 		return fmt.Errorf("build producer: %w", err)
 	}
 	defer prod.Close()
 
+	if *liveFlag {
+		if *githubToken == "" {
+			// Не hard requirement (критерий приёмки задачи 2.9 явно это оговаривает) — только
+			// предупреждение: неаутентифицированный поллинг работает, просто на лимите 60/час
+			// вместо 5000/час.
+			fmt.Fprintln(os.Stderr, "gh-collector: GITHUB_TOKEN не задан — поллинг Events API "+
+				"неаутентифицированный (лимит 60 запросов/час вместо 5000)")
+		}
+		eventsClient := events.NewClient(*githubToken, eventsMetrics, nil)
+		return runLive(ctx, eventsClient, prod, *shutdownTimeout, os.Stdout, os.Stderr)
+	}
+
+	archiveClient := archive.NewClient(archiveMetrics, nil)
 	return orchestrate(ctx, archiveClient, prod, pipelineConfig{
 		hours:           hours,
 		workers:         *workers,
@@ -423,6 +456,69 @@ func orchestrate(ctx context.Context, archiveClient fetcher, prod *producer.Prod
 		return nil
 	case fetchErr != nil:
 		return fmt.Errorf("backfill: %w", fetchErr)
+	default:
+		return nil
+	}
+}
+
+// runner — минимальный интерфейс, который нужен runLive от источника live-событий. Определён здесь,
+// в пакете-потребителе, той же идиомой, что и fetcher выше ("принимай интерфейсы, возвращай
+// структуры"): events.Client ничего не знает про этот интерфейс, просто соответствует ему по
+// сигнатуре метода. Тестам это даёт возможность подставить runner с точным контролем момента
+// доставки и отмены, без реального HTTP — тот же приём, что и pacedFetcher в main_test.go.
+type runner interface {
+	Run(ctx context.Context, out chan<- model.Event) error
+}
+
+// runLive запускает бесконечный поллинг GitHub Events API и продюсит нормализованные события в
+// Kafka. Устроена по тому же принципу graceful shutdown, что и orchestrate — поллинг прекращается
+// по ctx, канал вычитывается до закрытия независимо от состояния ctx (иначе уже полученные события
+// потерялись бы), Flush ждёт отдельным таймаутом, не связанным с ctx (см. подробное обоснование
+// каждого из этих трёх пунктов в доккомментарии orchestrate — оно дословно применимо и здесь).
+//
+// Код не переиспользован с orchestrate буквально: у неё конечный список часов и errgroup-worker
+// pool по ним, у runLive — единственный бесконечный источник (client.Run), и вводить общий для
+// обоих интерфейс/обёртку ради структурного сходства значило бы городить абстракцию под сценарий,
+// которого нет, — то, от чего явно предостерегает CLAUDE.md этого репозитория.
+func runLive(ctx context.Context, client runner, prod *producer.Producer, shutdownTimeout time.Duration, stdout, stderr io.Writer) error {
+	out := make(chan model.Event, eventQueueSize)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.Run(ctx, out)
+		close(out)
+	}()
+
+	// produceCtx — то же обоснование, что и в orchestrate: SIGINT не должен прерывать доставку уже
+	// полученных событий, только останавливать приём новых.
+	produceCtx := context.WithoutCancel(ctx)
+
+	read := 0
+	for evt := range out {
+		read++
+		prod.Produce(produceCtx, evt)
+	}
+	runErr := <-runDone
+
+	_, _ = fmt.Fprintf(stdout, "live: events_read=%d\n", read)
+
+	stopped := errors.Is(runErr, context.Canceled)
+	if stopped {
+		_, _ = fmt.Fprintf(stderr, "остановлено пользователем (SIGINT/SIGTERM): поллинг прекращён, "+
+			"флашим %d уже полученных событий в Kafka...\n", read)
+	}
+
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelFlush()
+	if err := prod.Flush(flushCtx); err != nil {
+		return fmt.Errorf("flush producer: %w", err)
+	}
+
+	switch {
+	case stopped:
+		return nil // exit code 0 — то же обоснование, что и в orchestrate: Flush выше уже подтвердил доставку.
+	case runErr != nil:
+		return fmt.Errorf("live: %w", runErr)
 	default:
 		return nil
 	}

@@ -442,6 +442,151 @@ func TestOrchestrateDispatchDoesNotDeadlockWhenHoursExceedWorkers(t *testing.T) 
 	}
 }
 
+// TestRunModeValidation проверяет, что run() требует ровно один режим из трёх (--hour, --backfill,
+// --live) и падает с ошибкой, оборачивающей errUsage, на любой другой комбинации — до того, как
+// код успевает тронуть сеть/Kafka (иначе тест понадобился бы с Docker, как остальные в этом файле).
+func TestRunModeValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "ни одного режима", args: []string{}},
+		{name: "--hour и --live одновременно", args: []string{"--hour", "2026-06-01-15", "--live"}},
+		{name: "--backfill и --live одновременно",
+			args: []string{"--backfill", "2026-06-01-0", "2026-06-02-0", "--live"}},
+		{name: "--hour и --backfill одновременно",
+			args: []string{"--hour", "2026-06-01-15", "--backfill", "2026-06-01-0", "2026-06-02-0"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := run(tt.args)
+			if !errors.Is(err, errUsage) {
+				t.Fatalf("run(%v) = %v, want ошибку, оборачивающую errUsage", tt.args, err)
+			}
+		})
+	}
+}
+
+// pacedRunner — тестовый runner (см. интерфейс runner в main.go) для runLive: тот же приём точного
+// управления моментом "событие доставлено в канал", что и у pacedFetcher выше (см. её
+// доккомментарий), только под сигнатуру Run(ctx, out) вместо FetchHour(ctx, hour, out).
+//
+// В отличие от pacedFetcher, где час GH Archive конечен и FetchHour возвращается сама, live-поллинг
+// не заканчивается никогда, пока жив ctx, — после того как events исчерпан, pacedRunner блокируется
+// на ctx.Done(), как и настоящий events.Client.Run в своём бесконечном цикле.
+type pacedRunner struct {
+	events []model.Event
+	sent   chan struct{}
+}
+
+func (r *pacedRunner) Run(ctx context.Context, out chan<- model.Event) error {
+	for _, evt := range r.events {
+		select {
+		case out <- evt:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case r.sent <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestRunLiveGracefulShutdownFlushesReadEvents — тот же критерий приёмки, что и у
+// TestOrchestrateGracefulShutdownFlushesReadEvents, только для live-режима: SIGINT (здесь — отмена
+// ctx программно, см. её доккомментарий) останавливает поллинг и завершает процесс кодом 0, без
+// потери уже полученных событий (флаш), но и не поставляя те, что live-источник ещё не успел отдать.
+func TestRunLiveGracefulShutdownFlushesReadEvents(t *testing.T) {
+	broker := startTestRedpanda(t)
+
+	const totalEvents = 50
+	const readBeforeCancel = 10
+
+	liveEvents := make([]model.Event, totalEvents)
+	for i := range liveEvents {
+		liveEvents[i] = model.Event{
+			EventID:   uint64(i + 1),
+			EventType: "WatchEvent",
+			CreatedAt: time.Date(2026, 7, 19, 10, 0, i, 0, time.UTC),
+			RepoID:    1,
+			RepoName:  "a/b",
+		}
+	}
+
+	prodMetrics := producer.NewMetrics(prometheus.NewRegistry())
+	prod, err := producer.New(t.Context(), producer.Config{Brokers: []string{broker}, Topic: "gh.events"}, prodMetrics, nil)
+	if err != nil {
+		t.Fatalf("producer.New: %v", err)
+	}
+	defer prod.Close()
+
+	r := &pacedRunner{events: liveEvents, sent: make(chan struct{})}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	runLiveDone := make(chan error, 1)
+	go func() {
+		runLiveDone <- runLive(ctx, r, prod, 30*time.Second, io.Discard, io.Discard)
+	}()
+
+	for i := range readBeforeCancel {
+		select {
+		case <-r.sent:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("pacedRunner не отправил %d-е событие за 10с — тест завис", i+1)
+		}
+	}
+	cancel() // имитация SIGINT
+
+	select {
+	case err := <-runLiveDone:
+		if err != nil {
+			t.Fatalf("runLive вернул ошибку при штатной остановке по SIGINT: %v (ожидался nil → exit code 0)", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("runLive не завершился после отмены ctx за 30с")
+	}
+
+	consumer, err := kgo.NewClient(kgo.SeedBrokers(broker), kgo.ConsumeTopics("gh.events"))
+	if err != nil {
+		t.Fatalf("собрать consumer-клиент: %v", err)
+	}
+	defer consumer.Close()
+
+	fetchCtx, cancelFetch := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancelFetch()
+
+	got := map[uint64]bool{}
+	for len(got) < readBeforeCancel {
+		fetches := consumer.PollFetches(fetchCtx)
+		if err := fetches.Err(); err != nil {
+			t.Fatalf("poll fetches: %v (доставлено %d/%d)", err, len(got), readBeforeCancel)
+		}
+		fetches.EachRecord(func(rec *kgo.Record) {
+			var evt model.Event
+			if err := json.Unmarshal(rec.Value, &evt); err != nil {
+				t.Fatalf("Unmarshal записи из Kafka: %v", err)
+			}
+			got[evt.EventID] = true
+		})
+	}
+	if len(got) < readBeforeCancel {
+		t.Fatalf("в Kafka долетело %d событий, ожидалось хотя бы %d уже полученных до SIGINT", len(got), readBeforeCancel)
+	}
+	if got[totalEvents] {
+		t.Errorf("событие event_id=%d долетело до Kafka — pacedRunner не должен был отдать его до отмены ctx", totalEvents)
+	}
+}
+
 // TestOrchestrateGracefulShutdownFlushesReadEvents — сквозной тест на самый труднопроверяемый
 // критерий приёмки задачи 1.4: «SIGINT во время бэкфилла завершает процесс с кодом 0, без потери
 // уже прочитанных событий (флаш)». Реального SIGINT здесь нет (main_test.go не порождает
