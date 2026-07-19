@@ -89,10 +89,10 @@ def _strip_sql_line_comments(sql: str) -> str:
 async def _apply_migrations(clickhouse_container: ClickHouseContainer) -> None:
     """Прогоняет все миграции `infra/clickhouse/migrations/` по порядку — включая `repo_stars_hourly_mv`.
 
-    В отличие от `test_consumer_integration.py` (только 001_events.sql — там MV не нужна), здесь
-    обязательна и 002_mv_hourly.sql: без неё `/trending` читает пустую несуществующую таблицу.
-    MV — триггер на INSERT (см. комментарий в самой миграции), поэтому порядок «сначала обе
-    миграции, потом вставка событий» не опционален.
+    Тот же glob-паттерн, что в `test_consumer_integration.py`/`test_consumer_recovery.py`: реальный
+    набор миграций, а не одна захардкоженная. Здесь MV особенно важна: без 002_mv_hourly.sql
+    `/trending` читает пустую несуществующую таблицу. MV — триггер на INSERT (см. комментарий в самой
+    миграции), поэтому порядок «сначала все миграции, потом вставка событий» не опционален.
     """
     client = await clickhouse_connect.get_async_client(
         host=clickhouse_container.get_container_host_ip(),

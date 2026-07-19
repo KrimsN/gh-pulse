@@ -1,8 +1,8 @@
 """Интеграционный тест на testcontainers: реальные Redpanda и ClickHouse, без моков (styleguide §4.1).
 
 Happy path задачи 1.6: события продюсятся в `gh.events`, консьюмер их вставляет батчем и коммитит
-offset только после успешной вставки. Восстановление после падения консьюмера посреди батча — это
-отдельный, более тяжёлый тест (задача 2.10), здесь он не заявляется и не проверяется.
+offset только после успешной вставки. Восстановление после падения консьюмера посреди батча
+(задача 2.10, ADR 0004) — отдельный, более тяжёлый тест в `test_consumer_recovery.py`.
 """
 
 import asyncio
@@ -24,9 +24,9 @@ from consumer.dlq import DlqProducer
 if TYPE_CHECKING:
     from clickhouse_connect.driver.asyncclient import AsyncClient
 
-# Та же миграция, что применяется в docker-compose (infra/clickhouse/migrations/001_events.sql) —
-# тест обязан работать против реальной схемы, а не её пересказа.
-MIGRATION_PATH = Path(__file__).resolve().parents[3] / "infra" / "clickhouse" / "migrations" / "001_events.sql"
+# Та же директория, что монтируется в docker-compose как /docker-entrypoint-initdb.d — тест обязан
+# прогонять ВСЕ миграции по порядку, как это делает сам ClickHouse при старте, а не одну из них.
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "clickhouse" / "migrations"
 
 EVENT_COUNT = 25
 TOPIC = "gh.events"
@@ -88,12 +88,15 @@ def _strip_sql_line_comments(sql: str) -> str:
     return "\n".join(line[: line.find("--")] if "--" in line else line for line in sql.splitlines())
 
 
-async def _apply_migration(clickhouse_container: ClickHouseContainer) -> None:
-    """Прогоняет 001_events.sql против чистого контейнера — создаёт БД ghpulse и таблицу events.
+async def _apply_migrations(clickhouse_container: ClickHouseContainer) -> None:
+    """Прогоняет все миграции `infra/clickhouse/migrations/` по порядку против чистого контейнера.
 
-    Отдельный клиент без выбранной базы: на момент вызова `ghpulse` ещё не существует, а
-    `CREATE DATABASE`/`CREATE TABLE ghpulse.events` в миграции полностью квалифицированы и не
-    нуждаются в текущей базе клиента.
+    Тот же список файлов и тот же порядок (`sorted(...glob("*.sql"))`), что применяет сам ClickHouse
+    из `/docker-entrypoint-initdb.d` в docker-compose (`docker-compose.yml`) — тест обязан завязываться
+    на реальный набор миграций, а не на то, какие из них существовали на момент написания теста.
+    Отдельный клиент без выбранной базы: на момент первого вызова `ghpulse` ещё не существует, а
+    `CREATE DATABASE`/`CREATE TABLE`/`CREATE MATERIALIZED VIEW` в миграциях полностью квалифицированы
+    и не нуждаются в текущей базе клиента.
     """
     client = await clickhouse_connect.get_async_client(
         host=clickhouse_container.get_container_host_ip(),
@@ -101,12 +104,13 @@ async def _apply_migration(clickhouse_container: ClickHouseContainer) -> None:
         username=CLICKHOUSE_USER,
         password=CLICKHOUSE_PASSWORD,
     )
-    sql = _strip_sql_line_comments(MIGRATION_PATH.read_text(encoding="utf-8"))
     try:
-        for raw_statement in sql.split(";"):
-            statement = raw_statement.strip()
-            if statement:
-                await client.command(statement)
+        for migration_path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            sql = _strip_sql_line_comments(migration_path.read_text(encoding="utf-8"))
+            for raw_statement in sql.split(";"):
+                statement = raw_statement.strip()
+                if statement:
+                    await client.command(statement)
     finally:
         await client.close()
 
@@ -114,7 +118,7 @@ async def _apply_migration(clickhouse_container: ClickHouseContainer) -> None:
 async def test_consumer_inserts_batch_and_commits_offset(
     redpanda: RedpandaContainer, clickhouse_container: ClickHouseContainer
 ) -> None:
-    await _apply_migration(clickhouse_container)
+    await _apply_migrations(clickhouse_container)
 
     clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
         host=clickhouse_container.get_container_host_ip(),

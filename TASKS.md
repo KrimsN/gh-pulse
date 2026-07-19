@@ -58,7 +58,7 @@ baseline записан.
 | 2.7 | OpenAPI-документация, модели ответов, курсорная пагинация, ETag/Cache-Control | pulse-api | ☑ |
 | 2.8 | Интеграционные тесты: pytest + testcontainers (реальные CH/PG/Kafka) | pulse-consumer, pulse-api | ☑ |
 | 2.9 | Live-путь: поллинг GitHub Events API (ETag, backoff по rate-limit) | gh-collector | ☑ |
-| 2.10 | Тест на восстановление консьюмера после падения (убить в середине батча, проверить отсутствие потерь) | pulse-consumer | ☐ |
+| 2.10 | Тест на восстановление консьюмера после падения (убить в середине батча, проверить отсутствие потерь) | pulse-consumer | ☑ |
 | 2.11 | Строгая валидация query-параметров: 422 на неизвестные поля (все эндпоинты) | pulse-api | ☐ |
 | 2.12 | Поднять тестовое покрытие до ~80% (эндпоинты pulse-api, retry-путь консьюмера, Go-хелперы) | pulse-api, pulse-consumer, gh-collector | ☐ |
 
