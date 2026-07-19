@@ -25,6 +25,31 @@ async def test_metrics_returns_prometheus_exposition() -> None:
     assert response.headers["content-type"] == CONTENT_TYPE_LATEST
 
 
+async def test_metrics_rejects_unknown_query_param() -> None:
+    """`/metrics` не объявляет ни одного query-параметра — любой лишний тоже 422 (задача 2.11)."""
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/metrics", params={"format": "json"})
+
+    assert response.status_code == httpx.codes.UNPROCESSABLE_ENTITY
+    assert response.json()["error"]["code"] == "unknown_query_parameter"
+
+
+async def test_trending_rejects_unknown_query_param() -> None:
+    """Проверка на уровне роутера (задача 2.11) — раньше `enforce_rate_limit`, поэтому без bypass_auth
+    и без X-API-Key запрос всё равно падает на 422, а не на 401.
+    """
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/trending", params={"window": "24h", "windo": "24h"})
+
+    assert response.status_code == httpx.codes.UNPROCESSABLE_ENTITY
+    assert response.json()["error"]["code"] == "unknown_query_parameter"
+    assert "windo" in response.json()["error"]["message"]
+
+
 # /api/v1/trending — с задачи 2.6 защищённый эндпоинт: без валидного X-API-Key любой запрос
 # получает 401 ещё до собственной валидации параметров (см. app/auth.py, зависимость
 # исполняется раньше query-параметров эндпоинта). Тесты на 422 ниже проверяют именно валидацию

@@ -44,8 +44,11 @@ from app.queries import (
     build_stats_query,
     build_trending_query,
 )
+from app.query_params import reject_unknown_query_params
 
-router = APIRouter()
+# Задача 2.11: применяется на уровне роутера, а не на каждом эндпоинте — общий механизм для всех
+# текущих и будущих роутов, см. докстроку app/query_params.py.
+router = APIRouter(dependencies=[Depends(reject_unknown_query_params)])
 
 DEPENDENCY_NAMES = ("clickhouse", "postgres", "redis")
 
@@ -79,16 +82,21 @@ async def metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+# 422 общий для всех роутов (задача 2.11 — `reject_unknown_query_params` на уровне роутера), поэтому
+# входит и в HEALTH_RESPONSES, и в PROTECTED_RESPONSES, а не только в защищённые эндпоинты.
 HEALTH_RESPONSES: dict[int | str, dict[str, object]] = {
     status.HTTP_200_OK: {"model": HealthResponse},
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},
     status.HTTP_503_SERVICE_UNAVAILABLE: {"model": HealthResponse},
 }
 
 # Общий хвост документации для всех защищённых `/api/v1/*`-роутов (задача 2.6 — `enforce_rate_limit`
-# на каждом из них). 401/429 сюда приходят из зависимости, а не из тела хендлера — response_model
-# роута их не увидит сам, `responses=` — единственный способ назвать их в OpenAPI-схеме.
+# на каждом из них; задача 2.11 — `reject_unknown_query_params` на всех без исключения). И 401/429,
+# и 422 сюда приходят из зависимостей, а не из тела хендлера — response_model роута их не увидит
+# сам, `responses=` — единственный способ назвать их в OpenAPI-схеме.
 PROTECTED_RESPONSES: dict[int | str, dict[str, object]] = {
     status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},
     status.HTTP_429_TOO_MANY_REQUESTS: {"model": ErrorResponse},
 }
 
