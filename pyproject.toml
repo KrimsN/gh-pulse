@@ -165,6 +165,16 @@ convention = "google"
 python_version = "3.13"
 strict = true
 exclude = ["build/", "dist/", "\\.venv/"]
+# Оба сервиса ставятся не как пакеты (package = false, см. tool.uv), поэтому `import app`/
+# `import consumer` резолвится только через путь поиска модулей, а не установку. mypy проверяет
+# каждый сервис отдельным инвокейшном (см. комментарий у python-lint в .github/workflows/ci.yml —
+# иначе коллизия на одноимённом пакете `tests`), но задаче 2.8 понадобился один тест
+# (test_end_to_end_pipeline.py), который живёт в pulse-api/tests и целиком по делу импортирует
+# consumer.* (Kafka → консьюмер → ClickHouse — весь путь, а не только API-часть). mypy_path с обоими
+# сервисами даёт транзитивным импортам резолвиться независимо от того, какой из двух — цель
+# конкретного инвокейшна; коллизии с `tests` это не создаёт, потому что каждый прогон по-прежнему
+# обходит файлы только одного каталога-цели, а не обоих сразу.
+mypy_path = ["services/pulse-api", "services/pulse-consumer"]
 
 [[tool.mypy.overrides]]
 module = "asyncpg.*"
