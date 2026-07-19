@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.config import get_settings
+from app.errors import ApiError, api_error_handler
 from app.logging_config import configure_logging
 from app.middleware import TraceIdMiddleware
 
@@ -72,4 +73,5 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
 app = FastAPI(title="pulse-api", version=get_settings().app_version, lifespan=lifespan)
 app.add_middleware(TraceIdMiddleware)
 app.add_exception_handler(Exception, unhandled_exception_handler)
+app.add_exception_handler(ApiError, api_error_handler)
 app.include_router(router)

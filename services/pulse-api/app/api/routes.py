@@ -4,10 +4,12 @@ from itertools import groupby
 from operator import itemgetter
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from app.auth import enforce_rate_limit
+from app.cache import cached_json_response
 from app.config import get_settings
 from app.helpers import probe_dependency
 from app.models import (
@@ -43,6 +45,12 @@ router = APIRouter()
 
 DEPENDENCY_NAMES = ("clickhouse", "postgres", "redis")
 
+# TTL кэша (задача 2.6): /trending короче, потому что окно 1h/24h само по себе меняется быстрее,
+# чем 30-90-дневные ряды /languages/trends — данные там физически не могут стать свежее раза в день
+# (`language_daily_mv`, задача 2.1).
+TRENDING_CACHE_TTL_SECONDS = 30
+LANGUAGE_TRENDS_CACHE_TTL_SECONDS = 60
+
 
 @router.get("/metrics")
 async def metrics() -> Response:
@@ -74,7 +82,7 @@ async def health(request: Request) -> JSONResponse:
     )
 
 
-@router.get("/api/v1/trending")
+@router.get("/api/v1/trending", dependencies=[Depends(enforce_rate_limit)])
 async def trending(
     request: Request,
     window: Annotated[Window, Query(description="Окно агрегации звёзд")] = "24h",
@@ -82,15 +90,18 @@ async def trending(
         str | None, Query(description="Фильтр по языку (работает по обогащённому подмножеству)")
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100, description="Максимум репозиториев в ответе")] = 50,
-) -> TrendingResponse:
+) -> Response:
     """Топ репозиториев по звёздам (`WatchEvent`) за окно — читает `repo_stars_hourly_mv` (задача 2.3).
 
     Baseline на прямом скане `ghpulse.events` (задача 1.8/1.9, до появления MV в 2.1) зафиксирован
     в `docs/PERFORMANCE.md` вместе с записью «после» этой оптимизации. Запрос с фильтром `language`
     остаётся на прямом скане `events` — у MV нет колонки `language` (см. `app/queries.py`).
 
+    Ответ кэшируется в Redis на `TRENDING_CACHE_TTL_SECONDS` (задача 2.6), ключ включает все три
+    параметра запроса — `X-Cache: HIT|MISS` показывает, обслужен ли он из кэша.
+
     Args:
-        request: Текущий запрос; клиент ClickHouse берётся из `request.app.state`.
+        request: Текущий запрос; клиент ClickHouse и Redis берутся из `request.app.state`.
         window: Окно агрегации звёзд.
         language: Опциональный фильтр по языку репозитория.
         limit: Максимум репозиториев в ответе.
@@ -98,17 +109,28 @@ async def trending(
     Returns:
         Топ репозиториев по числу звёзд за окно, отсортированный по убыванию.
     """
-    query, parameters = build_trending_query(window, language, limit)
-    result = await request.app.state.clickhouse.query(query, parameters=parameters)
 
-    items = [
-        TrendingItem(repo_id=repo_id, repo_name=repo_name, stars=stars, rank=rank)
-        for rank, (repo_id, repo_name, stars) in enumerate(result.result_rows, start=1)
-    ]
-    return TrendingResponse(window=window, generated_at=datetime.now(UTC), items=items)
+    async def build() -> bytes:
+        query, parameters = build_trending_query(window, language, limit)
+        result = await request.app.state.clickhouse.query(query, parameters=parameters)
+
+        items = [
+            TrendingItem(repo_id=repo_id, repo_name=repo_name, stars=stars, rank=rank)
+            for rank, (repo_id, repo_name, stars) in enumerate(result.result_rows, start=1)
+        ]
+        payload = TrendingResponse(window=window, generated_at=datetime.now(UTC), items=items)
+        return payload.model_dump_json().encode()
+
+    body, headers = await cached_json_response(
+        request.app.state.redis,
+        cache_key=f"trending:{window}:{language}:{limit}",
+        ttl_seconds=TRENDING_CACHE_TTL_SECONDS,
+        build=build,
+    )
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
-@router.get("/api/v1/repos/{owner}/{name}", response_model=RepoCardResponse)
+@router.get("/api/v1/repos/{owner}/{name}", response_model=RepoCardResponse, dependencies=[Depends(enforce_rate_limit)])
 async def repo_card(request: Request, owner: str, name: str) -> RepoCardResponse | JSONResponse:
     """Карточка репозитория: суммарная активность по типам событий и динамика звёзд по дням.
 
@@ -152,47 +174,60 @@ async def repo_card(request: Request, owner: str, name: str) -> RepoCardResponse
     )
 
 
-@router.get("/api/v1/languages/trends")
+@router.get("/api/v1/languages/trends", dependencies=[Depends(enforce_rate_limit)])
 async def languages_trends(
     request: Request,
     window: Annotated[TrendsWindow, Query(description="Окно временного ряда")] = "30d",
     granularity: Annotated[TrendsGranularity, Query(description="Гранулярность точек ряда")] = "day",
-) -> LanguageTrendsResponse:
+) -> Response:
     """Временные ряды событий по языку — читает `language_daily_mv` (задача 2.1).
 
     Работает по обогащённому подмножеству (`language != ''`): пока обогащение не запущено (задача
     4.3), `series` честно пуст, а `coverage` показывает нулевую долю, а не притворяется полным
     ответом. `coverage` считается по сырой `events` за то же окно, а не по MV (см. `app/queries.py`).
 
+    Ответ кэшируется в Redis на `LANGUAGE_TRENDS_CACHE_TTL_SECONDS` (задача 2.6) — см. докстроку
+    `trending` выше про смысл заголовков `X-Cache`/`Cache-Control`/`ETag`.
+
     Args:
-        request: Текущий запрос; клиент ClickHouse берётся из `request.app.state`.
+        request: Текущий запрос; клиент ClickHouse и Redis берутся из `request.app.state`.
         window: Окно временного ряда.
         granularity: Гранулярность точек; сейчас только `day` — единственная, которую хранит MV.
 
     Returns:
         Ряды по языкам и честную долю событий с известным языком за окно.
     """
-    coverage_query, coverage_parameters = build_language_coverage_query(window)
-    trends_query, trends_parameters = build_language_trends_query(window)
-    coverage_result, trends_result = await asyncio.gather(
-        request.app.state.clickhouse.query(coverage_query, parameters=coverage_parameters),
-        request.app.state.clickhouse.query(trends_query, parameters=trends_parameters),
-    )
-    known, total = coverage_result.result_rows[0]
-    coverage = known / total if total else 0.0
 
-    series = [
-        LanguageSeries(
-            language=language,
-            points=[LanguagePoint(date=row_date, events=events) for _, row_date, events in rows],
+    async def build() -> bytes:
+        coverage_query, coverage_parameters = build_language_coverage_query(window)
+        trends_query, trends_parameters = build_language_trends_query(window)
+        coverage_result, trends_result = await asyncio.gather(
+            request.app.state.clickhouse.query(coverage_query, parameters=coverage_parameters),
+            request.app.state.clickhouse.query(trends_query, parameters=trends_parameters),
         )
-        for language, rows in groupby(trends_result.result_rows, key=itemgetter(0))
-    ]
+        known, total = coverage_result.result_rows[0]
+        coverage = known / total if total else 0.0
 
-    return LanguageTrendsResponse(granularity=granularity, coverage=coverage, series=series)
+        series = [
+            LanguageSeries(
+                language=language,
+                points=[LanguagePoint(date=row_date, events=events) for _, row_date, events in rows],
+            )
+            for language, rows in groupby(trends_result.result_rows, key=itemgetter(0))
+        ]
+        payload = LanguageTrendsResponse(granularity=granularity, coverage=coverage, series=series)
+        return payload.model_dump_json().encode()
+
+    body, headers = await cached_json_response(
+        request.app.state.redis,
+        cache_key=f"languages_trends:{window}:{granularity}",
+        ttl_seconds=LANGUAGE_TRENDS_CACHE_TTL_SECONDS,
+        build=build,
+    )
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
-@router.get("/api/v1/activity/heatmap")
+@router.get("/api/v1/activity/heatmap", dependencies=[Depends(enforce_rate_limit)])
 async def activity_heatmap(request: Request) -> HeatmapResponse:
     """Профиль активности (день недели × час) за всю историю — читает `activity_hourly_mv` (2.1).
 
@@ -224,7 +259,7 @@ async def activity_heatmap(request: Request) -> HeatmapResponse:
     return HeatmapResponse(cells=cells)
 
 
-@router.get("/api/v1/stats")
+@router.get("/api/v1/stats", dependencies=[Depends(enforce_rate_limit)])
 async def stats(request: Request) -> StatsResponse:
     """Сводная статистика корпуса: размер, диапазон дат, число уникальных репозиториев/акторов.
 

@@ -693,7 +693,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
-    { name = "testcontainers", extra = ["clickhouse"] },
+    { name = "testcontainers", extra = ["clickhouse", "redis"] },
 ]
 
 [package.metadata]
@@ -707,7 +707,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff" },
-    { name = "testcontainers", extras = ["clickhouse", "kafka", "postgres"], specifier = ">=4.14.2" },
+    { name = "testcontainers", extras = ["clickhouse", "kafka", "postgres", "redis"], specifier = ">=4.14.2" },
 ]
 
 [[package]]
@@ -1681,6 +1681,9 @@ wheels = [
 [package.optional-dependencies]
 clickhouse = [
     { name = "clickhouse-driver" },
+]
+redis = [
+    { name = "redis" },
 ]
 
 [[package]]

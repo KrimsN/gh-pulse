@@ -18,7 +18,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "httpx",       # ASGITransport для тестов эндпоинтов без поднятого сервера
-    "testcontainers[clickhouse,kafka,postgres]>=4.14.2",
+    "testcontainers[clickhouse,kafka,postgres,redis]>=4.14.2",
     "pytest-cov>=7.1.0",
 ]
 

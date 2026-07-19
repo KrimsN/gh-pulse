@@ -94,6 +94,12 @@ curl localhost:8000/health
 docker compose exec pulse-api python -m app.cli create-key --owner "demo" --rate-limit 100
 ```
 
+Все `/api/v1/*`-эндпоинты требуют этот ключ в заголовке `X-API-Key`:
+
+```bash
+curl -H "X-API-Key: <ключ>" localhost:8000/api/v1/trending
+```
+
 ## Dev-зависимости
 
 Для `docker compose up` кроме Docker ничего не нужно. Дальше — что требуется, чтобы менять код,

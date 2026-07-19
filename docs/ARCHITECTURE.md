@@ -287,7 +287,7 @@ CREATE INDEX ix_saved_reports_key ON saved_reports (api_key_id, created_at DESC)
 ## API (черновик контракта)
 
 ```
-GET  /health                      — liveness/readiness
+GET  /health                      — liveness/readiness, без ключа
 GET  /api/v1/trending             — топ репозиториев по звёздам
        ?window=1h|24h|7d&language=python&limit=50
 GET  /api/v1/repos/{owner}/{name} — карточка репозитория: активность, динамика
@@ -295,13 +295,19 @@ GET  /api/v1/languages/trends     — доли языков по времени
        ?window=30d&granularity=day
 GET  /api/v1/activity/heatmap     — активность по часам/дням недели
 GET  /api/v1/stats                — размер корпуса, лаг ingest, свежесть данных
-POST /api/v1/reports              — сохранить отчёт (нужен API-ключ)
+POST /api/v1/reports              — сохранить отчёт
 GET  /api/v1/reports/{id}         — выполнить сохранённый отчёт
-GET  /metrics                     — Prometheus
+GET  /metrics                     — Prometheus, без ключа
 ```
 
-Требования: везде Pydantic-модели ответов, курсорная пагинация, rate limiting по ключу через Redis,
-`Cache-Control` и ETag на агрегатах, structured logging с `trace_id`.
+Все `/api/v1/*`-эндпоинты защищены API-ключом — заголовок `X-API-Key` (не `Authorization: Bearer`,
+чтобы не намекать на OAuth/JWT, которых в проекте намеренно нет). `/health` и `/metrics` — открыты,
+это операционные эндпоинты, не часть аналитического API. Rate limiting по ключу (лимит —
+`api_keys.rate_limit`, окно 60 с, sliding window log в Redis) действует на все защищённые роуты;
+`/trending` и `/languages/trends` дополнительно кэшируются в Redis (TTL 30 и 60 с соответственно,
+заголовки `X-Cache: HIT|MISS`, `Cache-Control`, `ETag`) — детали реализации в `services/pulse-api/app/{auth,rate_limit,cache}.py`.
+
+Требования: везде Pydantic-модели ответов, курсорная пагинация, structured logging с `trace_id`.
 
 **Формат ошибок** (единый для всех эндпоинтов):
 
