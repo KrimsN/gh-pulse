@@ -55,7 +55,7 @@ baseline записан.
 | 2.4 | Остальные эндпоинты: карточка репозитория, тренды языков, heatmap активности, stats | pulse-api | ☑ |
 | 2.5 | PostgreSQL: api_keys + saved_reports, миграции Alembic | pulse-api | ☑ |
 | 2.6 | Redis: кэш горячих агрегатов + rate limiting по ключу | pulse-api | ☑ |
-| 2.7 | OpenAPI-документация, модели ответов, курсорная пагинация, ETag/Cache-Control | pulse-api | ☐ |
+| 2.7 | OpenAPI-документация, модели ответов, курсорная пагинация, ETag/Cache-Control | pulse-api | ☑ |
 | 2.8 | Интеграционные тесты: pytest + testcontainers (реальные CH/PG/Kafka) | pulse-consumer, pulse-api | ☐ |
 | 2.9 | Live-путь: поллинг GitHub Events API (ETag, backoff по rate-limit) | gh-collector | ☐ |
 | 2.10 | Тест на восстановление консьюмера после падения (убить в середине батча, проверить отсутствие потерь) | pulse-consumer | ☐ |

@@ -289,7 +289,7 @@ CREATE INDEX ix_saved_reports_key ON saved_reports (api_key_id, created_at DESC)
 ```
 GET  /health                      — liveness/readiness, без ключа
 GET  /api/v1/trending             — топ репозиториев по звёздам
-       ?window=1h|24h|7d&language=python&limit=50
+       ?window=1h|24h|7d&language=python&limit=50&cursor=eyJv...
 GET  /api/v1/repos/{owner}/{name} — карточка репозитория: активность, динамика
 GET  /api/v1/languages/trends     — доли языков по времени
        ?window=30d&granularity=day
@@ -306,6 +306,13 @@ GET  /metrics                     — Prometheus, без ключа
 `api_keys.rate_limit`, окно 60 с, sliding window log в Redis) действует на все защищённые роуты;
 `/trending` и `/languages/trends` дополнительно кэшируются в Redis (TTL 30 и 60 с соответственно,
 заголовки `X-Cache: HIT|MISS`, `Cache-Control`, `ETag`) — детали реализации в `services/pulse-api/app/{auth,rate_limit,cache}.py`.
+
+Все аналитические эндпоинты (`/trending`, `/repos/{owner}/{name}`, `/languages/trends`,
+`/activity/heatmap`, `/stats`) поддерживают `If-None-Match` — совпавший `ETag` отвечает 304 без тела,
+даже там, где нет Redis-кэша (`app/http_cache.py`). `/trending` — единственный по-настоящему
+списочный эндпоинт контракта, поэтому курсорная пагинация (`?cursor=`, ответ несёт `next_cursor`)
+реализована только на нём; keyset, не `OFFSET` — список читает горячий агрегат, который продолжает
+меняться между запросами двух страниц одного клиента (`app/pagination.py`).
 
 Требования: везде Pydantic-модели ответов, курсорная пагинация, structured logging с `trace_id`.
 

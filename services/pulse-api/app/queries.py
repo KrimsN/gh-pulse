@@ -7,12 +7,23 @@
 from typing import Final
 
 from app.models import TrendsWindow, Window
+from app.pagination import TrendingCursor
 
 WINDOW_SECONDS: Final[dict[Window, int]] = {"1h": 3600, "24h": 86400, "7d": 604800}
 TRENDS_WINDOW_DAYS: Final[dict[TrendsWindow, int]] = {"7d": 7, "30d": 30, "90d": 90}
 
+# Keyset-условие пагинации (задача 2.7) — общее для обоих путей `build_trending_query`, оба
+# заканчивают `GROUP BY repo_id` со `stars` как агрегатным алиасом, поэтому условие идёт в HAVING,
+# а не WHERE (алиас агрегата недоступен до группировки). Разбор условия — в докстроке
+# `app/pagination.py`.
+_CURSOR_HAVING = """
+            HAVING stars < {cursor_stars:UInt64}
+                OR (stars = {cursor_stars:UInt64} AND repo_id > {cursor_repo_id:UInt64})"""
 
-def build_trending_query(window: Window, language: str | None, limit: int) -> tuple[str, dict[str, object]]:
+
+def build_trending_query(
+    window: Window, language: str | None, limit: int, after: TrendingCursor | None = None
+) -> tuple[str, dict[str, object]]:
     """Строит запрос топа репозиториев по звёздам за окно.
 
     Задача 2.3 — читает `repo_stars_hourly_mv` (задача 2.1, бэкфилл — 2.2) вместо прямого скана
@@ -40,37 +51,49 @@ def build_trending_query(window: Window, language: str | None, limit: int) -> tu
     между прямым сканом и MV) подмножество этих связок — не баг агрегации, а недетерминированный
     tie-break, который к тому же делал бы топ нестабильным между двумя одинаковыми запросами подряд.
 
+    **Пагинация (задача 2.7)** — `after` не трогает `WHERE`: обе ветки агрегируют `stars` через
+    `GROUP BY repo_id`, поэтому keyset-условие идёт в `HAVING` (`_CURSOR_HAVING`), после того как
+    алиас `stars` уже посчитан. `HAVING` подставляется перед `ORDER BY` в тексте обеих веток —
+    порядок предложений в SQL фиксирован (`HAVING` не может идти после `ORDER BY`), а не то же самое
+    место в обеих f-строках, поэтому подстановка через `.replace()`-точку, а не конкатенацию с конца.
+
     Args:
         window: Окно агрегации звёзд.
         language: Опциональный фильтр по языку репозитория; при указании обходит MV.
         limit: Максимум строк в ответе.
+        after: Курсор последней строки предыдущей страницы; `None` — первая страница.
 
     Returns:
         Пара (SQL-текст, параметры для server-side binding clickhouse-connect).
     """
     parameters: dict[str, object] = {"window_seconds": WINDOW_SECONDS[window], "limit": limit}
+    having = ""
+    if after is not None:
+        parameters["cursor_stars"] = after.stars
+        parameters["cursor_repo_id"] = after.repo_id
+        having = _CURSOR_HAVING
 
     if language:
         parameters["language"] = language
-        query = """
+        query = f"""
             SELECT repo_id, any(repo_name) AS repo_name, count() AS stars
             FROM ghpulse.events
             WHERE event_type = 'WatchEvent'
-              AND created_at >= now() - INTERVAL {window_seconds:UInt32} SECOND
-              AND language = {language:String}
-            GROUP BY repo_id
+              AND created_at >= now() - INTERVAL {{window_seconds:UInt32}} SECOND
+              AND language = {{language:String}}
+            GROUP BY repo_id{having}
             ORDER BY stars DESC, repo_id ASC
-            LIMIT {limit:UInt32}
+            LIMIT {{limit:UInt32}}
         """
         return query, parameters
 
-    query = """
+    query = f"""
         SELECT repo_id, any(repo_name) AS repo_name, sum(stars) AS stars
         FROM ghpulse.repo_stars_hourly_mv
-        WHERE hour >= toStartOfHour(now() - INTERVAL {window_seconds:UInt32} SECOND)
-        GROUP BY repo_id
+        WHERE hour >= toStartOfHour(now() - INTERVAL {{window_seconds:UInt32}} SECOND)
+        GROUP BY repo_id{having}
         ORDER BY stars DESC, repo_id ASC
-        LIMIT {limit:UInt32}
+        LIMIT {{limit:UInt32}}
     """
     return query, parameters
 

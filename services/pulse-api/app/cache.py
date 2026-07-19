@@ -8,13 +8,19 @@
 влияют на результат (`window`, `language`, `limit`, ...). Тело хранится как уже сериализованный
 JSON (`bytes`), а не как pydantic-модель — так и `ETag`, и повторная отдача клиенту считаются с
 одних и тех же байт, без риска, что пересборка модели даст другую сериализацию.
+
+`ETag` считается через `app/http_cache.etag_for` (задача 2.7) — та же функция, что и у некэшируемых
+агрегатов (`repo_card`, `activity_heatmap`, `stats`), одна формула на всё API. Собственно решение
+«вернуть 304, если `If-None-Match` совпал» этот модуль не принимает — это `app/http_cache.conditional_response`,
+вызываемый роутом уже после `cached_json_response`.
 """
 
-import hashlib
 from collections.abc import Awaitable, Callable
 from typing import Final
 
 from redis.asyncio import Redis
+
+from app.http_cache import etag_for
 
 CACHE_KEY_PREFIX: Final = "cache:v1"
 
@@ -54,6 +60,6 @@ async def cached_json_response(
     headers = {
         "X-Cache": cache_status,
         "Cache-Control": f"public, max-age={ttl_seconds}",
-        "ETag": f'"{hashlib.sha256(body).hexdigest()}"',
+        "ETag": etag_for(body),
     }
     return body, headers

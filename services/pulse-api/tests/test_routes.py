@@ -69,6 +69,18 @@ async def test_trending_rejects_limit_below_minimum() -> None:
     assert response.status_code == httpx.codes.UNPROCESSABLE_ENTITY
 
 
+@pytest.mark.usefixtures("bypass_auth")
+async def test_trending_rejects_malformed_cursor() -> None:
+    """Курсор разбирается до похода в ClickHouse/Redis (задача 2.7) — 400, не 500."""
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/trending", params={"cursor": "not-a-real-cursor!!!"})
+
+    assert response.status_code == httpx.codes.BAD_REQUEST
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
 async def test_trending_without_api_key_is_unauthorized() -> None:
     """Без переопределения зависимости запрос падает на `require_api_key` раньше ClickHouse/Redis."""
     transport = httpx.ASGITransport(app=app)
