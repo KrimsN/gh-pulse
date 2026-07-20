@@ -141,6 +141,11 @@ services:
     image: prom/prometheus:v2.55.1
     container_name: ghpulse-prometheus
     networks: [ghpulse]
+    # gh-collector — CLI на хосте (см. комментарий у jaeger ниже), поэтому его /metrics недостижим по
+    # имени сервиса в сети ghpulse. host-gateway работает и на Docker Desktop, и на Linux-хостах
+    # (Docker 20.10+), где host.docker.internal без этой записи не резолвится вовсе.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus

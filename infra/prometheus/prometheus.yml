@@ -14,3 +14,9 @@ scrape_configs:
   - job_name: pulse-consumer
     static_configs:
       - targets: ["pulse-consumer:8001"]
+
+  # gh-collector запускается с хоста, а не как сервис compose (см. docker-compose.yml), поэтому
+  # адрес — не имя контейнера в сети ghpulse, а host-gateway (см. extra_hosts у prometheus).
+  - job_name: gh-collector
+    static_configs:
+      - targets: ["host.docker.internal:9469"]

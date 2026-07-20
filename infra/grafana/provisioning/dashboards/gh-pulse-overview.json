@@ -1,0 +1,137 @@
+{
+  "uid": "gh-pulse-overview",
+  "title": "GH Pulse — обзор пайплайна",
+  "tags": ["gh-pulse"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Consumer lag — ключевая метрика здоровья стриминга",
+      "description": "Отставание pulse-consumer от конца партиции gh.events: highwater(tp) - position(tp). Растущий лаг = консьюмер не успевает за продюсером.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ghpulse_consumer_lag",
+          "legendFormat": "partition {{partition}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(ghpulse_consumer_lag)",
+          "legendFormat": "итого"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "RPS pulse-api",
+      "description": "Запросы в секунду по HTTP-статусу.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_requests_total[1m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Latency pulse-api: p50 / p95 / p99",
+      "description": "Перцентили длительности HTTP-запроса по всем эндпоинтам.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Скорость ingest, events/sec",
+      "description": "Продюсер (gh-collector → Kafka), консьюмер (Kafka → pulse-consumer) и фактическая вставка в ClickHouse.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(gh_collector_events_produced_total[1m])",
+          "legendFormat": "produced (collector → Kafka)"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(ghpulse_consumer_events_consumed_total[1m])",
+          "legendFormat": "consumed (Kafka → consumer)"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(ghpulse_consumer_events_inserted_total[1m])",
+          "legendFormat": "inserted (→ ClickHouse)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Доля DLQ",
+      "description": "Доля сообщений, ушедших в dead-letter топик gh.events.dlq, от всех потреблённых.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": { "drawStyle": "line", "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(ghpulse_consumer_dlq_total[5m])) / clamp_min(sum(rate(ghpulse_consumer_events_consumed_total[5m])), 1e-9)",
+          "legendFormat": "DLQ %"
+        }
+      ]
+    }
+  ]
+}
