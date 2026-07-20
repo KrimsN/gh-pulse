@@ -7,16 +7,23 @@ import redis.asyncio as redis
 import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from app.api.routes import router
 from app.config import get_settings
 from app.errors import ApiError, api_error_handler
 from app.logging_config import configure_logging
 from app.middleware import TraceIdMiddleware
+from app.tracing import setup_tracing
 
 # До импорта этого модуля uvicorn уже применил свой dictConfig — наша настройка перекрывает его, и
 # логи старта приложения выходят JSON'ом наравне с остальными.
 configure_logging(get_settings().log_level)
+
+# На уровне модуля, а не внутри lifespan: FastAPIInstrumentor.instrument_app ниже оборачивает ASGI-
+# приложение один раз при импорте, и TracerProvider обязан существовать до этого момента — иначе
+# инструментация захватила бы process-default NoOpTracerProvider вместо настоящего (ADR 0009).
+tracer_provider = setup_tracing("pulse-api")
 
 logger = structlog.get_logger()
 
@@ -29,6 +36,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # создания, поэтому падение на втором клиенте не оставит первый открытым, а исключение в одном
     # close() не оборвёт остальные.
     async with AsyncExitStack() as stack:
+        stack.callback(tracer_provider.shutdown)
+
         clickhouse = await clickhouse_connect.get_async_client(
             host=settings.clickhouse_host,
             port=settings.clickhouse_port,
@@ -75,3 +84,6 @@ app.add_middleware(TraceIdMiddleware)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.add_exception_handler(ApiError, api_error_handler)
 app.include_router(router)
+# Оборачивает ASGI-приложение целиком (не add_middleware) — span запроса открывается снаружи
+# TraceIdMiddleware, поэтому она видит уже активный span и берёт его trace_id как есть (ADR 0009).
+FastAPIInstrumentor.instrument_app(app)

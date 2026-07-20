@@ -22,6 +22,7 @@ from consumer.consumer import run
 from consumer.dlq import DlqProducer
 from consumer.logging_config import configure_logging
 from consumer.metrics import start_metrics_server
+from consumer.tracing import setup_tracing
 
 # Точка входа целиком исключена из покрытия pragma-комментариями — process-wiring уже проверяется
 # docker-smoke (/health на живом окружении в CI), юнит-тест с моком ClickHouse/Kafka/сигналов здесь
@@ -53,6 +54,9 @@ async def _main() -> None:  # pragma: no cover
     _install_signal_handlers(asyncio.get_running_loop(), stop_event)
 
     async with AsyncExitStack() as stack:
+        tracer_provider = setup_tracing("pulse-consumer")
+        stack.callback(tracer_provider.shutdown)
+
         clickhouse = await clickhouse_connect.get_async_client(
             host=settings.clickhouse_host,
             port=settings.clickhouse_port,

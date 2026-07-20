@@ -33,6 +33,7 @@ import (
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/events"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/producer"
+	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/tracing"
 )
 
 // errUsage — сигнальная ошибка неверных флагов/аргументов. main отличает её от сбоя fetch/produce
@@ -115,6 +116,8 @@ func run(args []string) error {
 		"живой поллинг GitHub Events API вместо GH Archive (нужен ровно один режим — --hour, --backfill или --live)")
 	githubToken := fs.String("github-token", envOr("GITHUB_TOKEN", ""),
 		"токен GitHub для --live (или переменная окружения GITHUB_TOKEN); без токена поллинг неаутентифицированный (60 запросов/час вместо 5000)")
+	otelEndpoint := fs.String("otel-endpoint", envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
+		"адрес OTLP/gRPC-приёмника трассировки, обычно Jaeger (или переменная окружения OTEL_EXPORTER_OTLP_ENDPOINT), см. ADR 0009")
 
 	if err := fs.Parse(rest); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
@@ -205,6 +208,20 @@ func run(args []string) error {
 	// прочитанных событий (см. её доккомментарий).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Ошибку Setup здесь намеренно не отдаём наверх как fatal: недоступный Jaeger — это дыра в
+	// наблюдаемости, а не причина не качать события, которые и так дойдут до ClickHouse без
+	// трассировки (ADR 0009 явно не делает трассировку частью гарантии доставки).
+	shutdownTracing, tracingErr := tracing.Setup(ctx, "gh-collector", *otelEndpoint)
+	if tracingErr != nil {
+		fmt.Fprintf(os.Stderr, "tracing: %v (продолжаем без трассировки)\n", tracingErr)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
 
 	prod, err := producer.New(ctx, producer.Config{Brokers: brokers, Topic: *kafkaTopic}, producerMetrics, nil)
 	if err != nil {

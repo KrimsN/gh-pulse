@@ -5,6 +5,7 @@ from typing import Final
 import structlog
 from fastapi import Request, status
 from fastapi.responses import Response
+from opentelemetry import trace
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
@@ -63,9 +64,28 @@ def _route_label(request: Request) -> str:
     return _path_format_of(effective_route) or _path_format_of(request.scope.get("route")) or UNMATCHED_ROUTE
 
 
+def _current_trace_id() -> str:
+    """Отдаёт `trace_id` активного OTel-span'а как 32-символьный hex — тот же формат, что и
+    прежний `uuid4().hex`, поэтому смена источника не меняет контракт `X-Trace-Id`/логов.
+
+    `FastAPIInstrumentor` (app/main.py) оборачивает всё приложение, включая эту middleware, своим
+    span'ом раньше, чем управление доходит сюда (ADR 0009) — значит, span уже активен к этому
+    моменту при обычной работе через ASGI-сервер. Фолбэк на `uuid4()` — не мёртвый код: он
+    срабатывает в юнит-тестах, которые дёргают middleware напрямую без полного ASGI-стека, и не
+    оставляет `trace_id` пустым в таком окружении.
+
+    Returns:
+        32-символьный hex `trace_id`.
+    """
+    span_context = trace.get_current_span().get_span_context()
+    if span_context.is_valid:
+        return format(span_context.trace_id, "032x")
+    return uuid.uuid4().hex
+
+
 class TraceIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        trace_id = uuid.uuid4().hex
+        trace_id = _current_trace_id()
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(trace_id=trace_id, path=request.url.path, method=request.method)
 

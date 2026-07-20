@@ -17,9 +17,47 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 )
+
+// tracer — один на пакет: span'ы продюсера не несут состояния между вызовами Produce, отдельный
+// экземпляр на Producer не даёт ничего, что не даёт разделяемый глобальный TracerProvider
+// (internal/tracing.Setup устанавливает его один раз на процесс).
+var tracer = otel.Tracer("github.com/KrimsN/gh-pulse/services/gh-collector/internal/producer")
+
+// kafkaHeaderCarrier реализует propagation.TextMapCarrier поверх *[]kgo.RecordHeader — W3C
+// traceparent инжектится прямо в заголовки Kafka-записи (ADR 0009), а не куда-то ещё, потому что
+// заголовки — единственное место в самом сообщении, которое переживает путь до pulse-consumer:
+// Value занят телом события, а Key — event_id для партиционирования (см. Produce ниже).
+type kafkaHeaderCarrier struct {
+	headers *[]kgo.RecordHeader
+}
+
+func (c kafkaHeaderCarrier) Get(key string) string {
+	for _, h := range *c.headers {
+		if h.Key == key {
+			return string(h.Value)
+		}
+	}
+	return ""
+}
+
+func (c kafkaHeaderCarrier) Set(key, value string) {
+	*c.headers = append(*c.headers, kgo.RecordHeader{Key: key, Value: []byte(value)})
+}
+
+func (c kafkaHeaderCarrier) Keys() []string {
+	keys := make([]string, len(*c.headers))
+	for i, h := range *c.headers {
+		keys[i] = h.Key
+	}
+	return keys
+}
 
 // ErrTopicMissing — сигнальная ошибка: топик, в который должен писать продюсер, не существует.
 // New оборачивает её через %w, чтобы вызывающий код (cmd/gh-collector) мог отличить эту причину
@@ -195,6 +233,16 @@ func ensureTopicExists(ctx context.Context, client *kgo.Client, topic string) er
 func (p *Producer) Produce(ctx context.Context, evt model.Event) {
 	started := time.Now()
 
+	// Root span на событие, не дочерний ничьего родителя из ctx: у fetch-стадии (archive.Client)
+	// нет собственного span'а, который имело бы смысл считать причиной именно этого сообщения, а
+	// пустой span-контекст здесь и означает "новый trace" (см. ADR 0009 — единица трассировки на
+	// этой стороне — событие, не батч и не час бэкфилла).
+	ctx, span := tracer.Start(ctx, "kafka.produce", trace.WithAttributes(
+		attribute.String("messaging.system", "kafka"),
+		attribute.String("messaging.destination", p.topic),
+		attribute.Int64("event.id", int64(evt.EventID)), //nolint:gosec // event_id — decimal Kafka-ключ, не секрет
+	))
+
 	value, err := json.Marshal(evt)
 	if err != nil {
 		// model.Event — плоская структура из скалярных полей и time.Time; у обоих Marshal не
@@ -202,6 +250,9 @@ func (p *Producer) Produce(ctx context.Context, evt model.Event) {
 		// данных GitHub, и его лучше увидеть в метриках/логе, чем проглотить молча.
 		p.logger.Printf("producer: marshal event_id=%d: %v", evt.EventID, err)
 		p.metrics.observeFailure(started)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal failed")
+		span.End()
 		return
 	}
 
@@ -215,11 +266,17 @@ func (p *Producer) Produce(ctx context.Context, evt model.Event) {
 		// будто на что-то влияет, а на самом деле нет. created_at самого события и так едет
 		// внутри Value как обычное поле JSON.
 	}
+	// traceparent — в заголовки записи, не в Value: consumer.consumer (pulse-consumer) извлекает
+	// его оттуда для span-link на batch-обработку (ADR 0009), не трогая тело события.
+	otel.GetTextMapPropagator().Inject(ctx, kafkaHeaderCarrier{headers: &rec.Headers})
 
 	p.client.Produce(ctx, rec, func(_ *kgo.Record, err error) {
+		defer span.End()
 		if err != nil {
 			p.logger.Printf("producer: deliver event_id=%d to %s: %v", evt.EventID, p.topic, err)
 			p.metrics.observeFailure(started)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "deliver failed")
 			return
 		}
 		p.metrics.observeSuccess(started)

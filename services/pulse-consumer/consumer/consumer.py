@@ -20,6 +20,7 @@ from aiokafka.errors import NoOffsetForPartitionError
 from aiokafka.structs import ConsumerRecord
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import ClickHouseError
+from opentelemetry import propagate, trace
 
 from consumer.clickhouse import insert_events_batch
 from consumer.config import Settings
@@ -28,6 +29,24 @@ from consumer.metrics import BATCH_SIZE, CONSUMER_LAG, EVENTS_CONSUMED, EVENTS_D
 from consumer.model import Event, PoisonMessageError, parse_event
 
 logger = structlog.get_logger()
+tracer = trace.get_tracer(__name__)
+
+
+def _producer_link(message: ConsumerRecord) -> trace.Link | None:
+    """Достаёт `trace.Link` на span продюсера из заголовков Kafka-сообщения, если он там есть.
+
+    Не родитель, а именно link (ADR 0009): у span'а обработки батча один родитель, но батч содержит
+    до `batch_max_records` сообщений сразу, каждое — из своего trace, инжектированного
+    `gh-collector` в заголовки при продюсировании (`internal/producer.Producer.Produce`).
+
+    Returns:
+        `Link` на span-контекст продюсера либо `None`, если заголовков нет (сообщение старее этой
+        задачи) или контекст в них невалиден.
+    """
+    carrier = {key: value.decode() for key, value in message.headers if value is not None}
+    ctx = propagate.extract(carrier)
+    span_context = trace.get_current_span(ctx).get_span_context()
+    return trace.Link(span_context) if span_context.is_valid else None
 
 
 def split_valid(
@@ -64,26 +83,32 @@ async def _insert_with_backpressure(
     чем повторить ровно тот же insert. Backlog поэтому ограничен одним уже полученным батчем, а не
     безграничным in-memory буфером на время падения ClickHouse.
     """
-    delay = settings.backoff_initial_seconds
-    paused = False
-    while True:
-        started = time.perf_counter()
-        try:
-            summary = await insert_events_batch(clickhouse, rows)
-        except ClickHouseError:
-            if not paused:
-                consumer.pause(*consumer.assignment())
-                paused = True
-            logger.exception("clickhouse_insert_failed", batch_size=len(rows), retry_in_seconds=delay)
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, settings.backoff_max_seconds)
-            continue
+    # Span на весь ретрай-цикл, а не на одну попытку: длительность span'а тогда честно включает
+    # время под backpressure (партиции на паузе) — то самое, что и наблюдать интересно, если
+    # ClickHouse тормозит или недоступен, а не только время последней успешной попытки.
+    with tracer.start_as_current_span(
+        "clickhouse.insert_batch", attributes={"messaging.batch.message_count": len(rows)}
+    ):
+        delay = settings.backoff_initial_seconds
+        paused = False
+        while True:
+            started = time.perf_counter()
+            try:
+                summary = await insert_events_batch(clickhouse, rows)
+            except ClickHouseError:
+                if not paused:
+                    consumer.pause(*consumer.assignment())
+                    paused = True
+                logger.exception("clickhouse_insert_failed", batch_size=len(rows), retry_in_seconds=delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, settings.backoff_max_seconds)
+                continue
 
-        INSERT_LATENCY.observe(time.perf_counter() - started)
-        if paused:
-            consumer.resume(*consumer.assignment())
-        logger.info("batch_inserted", count=summary.written_rows)
-        return
+            INSERT_LATENCY.observe(time.perf_counter() - started)
+            if paused:
+                consumer.resume(*consumer.assignment())
+            logger.info("batch_inserted", count=summary.written_rows)
+            return
 
 
 async def _update_lag_metric(consumer: AIOKafkaConsumer) -> None:
@@ -152,20 +177,28 @@ async def run(
             await _update_lag_metric(consumer)
             continue
 
-        EVENTS_CONSUMED.inc(len(messages))
-        rows, poison = split_valid(messages)
+        # Links, не parent: см. docstring _producer_link и ADR 0009. Собираются до входа в span —
+        # trace.Link не принимает "текущий" контекст, только уже готовый SpanContext.
+        links = [link for message in messages if (link := _producer_link(message)) is not None]
+        with tracer.start_as_current_span(
+            "consumer.process_batch",
+            links=links,
+            attributes={"messaging.batch.message_count": len(messages)},
+        ):
+            EVENTS_CONSUMED.inc(len(messages))
+            rows, poison = split_valid(messages)
 
-        for record, error in poison:
-            await dlq.send(record, error)
-        if poison:
-            EVENTS_DLQ.inc(len(poison))
+            for record, error in poison:
+                await dlq.send(record, error)
+            if poison:
+                EVENTS_DLQ.inc(len(poison))
 
-        if rows:
-            BATCH_SIZE.observe(len(rows))
-            await _insert_with_backpressure(consumer, clickhouse, rows, settings)
-            EVENTS_INSERTED.inc(len(rows))
+            if rows:
+                BATCH_SIZE.observe(len(rows))
+                await _insert_with_backpressure(consumer, clickhouse, rows, settings)
+                EVENTS_INSERTED.inc(len(rows))
 
-        # Коммит ТОЛЬКО после того, как батч надёжно лёг в ClickHouse и весь poison ушёл в DLQ —
-        # см. модульный docstring про at-least-once и идемпотентность на чтении (ADR 0004).
-        await consumer.commit()
+            # Коммит ТОЛЬКО после того, как батч надёжно лёг в ClickHouse и весь poison ушёл в DLQ —
+            # см. модульный docstring про at-least-once и идемпотентность на чтении (ADR 0004).
+            await consumer.commit()
         await _update_lag_metric(consumer)
