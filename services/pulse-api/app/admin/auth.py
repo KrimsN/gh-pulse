@@ -16,7 +16,7 @@ from fastapi import Depends, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.core.errors import ApiError
-from app.security.keys import hash_api_key
+from app.security.keys import find_active_key, hash_api_key
 
 security = HTTPBasic()
 
@@ -36,10 +36,7 @@ async def require_admin_auth(request: Request, credentials: Annotated[HTTPBasicC
         ApiError: 401 с `WWW-Authenticate: Basic`, если пароль не совпал ни с одним активным ключом —
             браузер в ответ на этот заголовок снова показывает диалог ввода.
     """
-    row = await request.app.state.postgres.fetchrow(
-        "SELECT 1 FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
-        hash_api_key(credentials.password),
-    )
+    row = await find_active_key(request.app.state.postgres, hash_api_key(credentials.password))
     if row is None:
         raise ApiError(
             status_code=status.HTTP_401_UNAUTHORIZED,

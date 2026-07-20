@@ -12,7 +12,7 @@ from typing import Annotated
 from fastapi import Depends, Header, Request
 
 from app.core.errors import ApiError
-from app.security.keys import hash_api_key
+from app.security.keys import find_active_key, hash_api_key
 from app.security.rate_limit import check_rate_limit
 
 
@@ -45,10 +45,7 @@ async def require_api_key(request: Request, x_api_key: Annotated[str | None, Hea
     if not x_api_key:
         raise ApiError(status_code=401, code="unauthorized", message="Missing X-API-Key header")
 
-    row = await request.app.state.postgres.fetchrow(
-        "SELECT id, owner, rate_limit FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
-        hash_api_key(x_api_key),
-    )
+    row = await find_active_key(request.app.state.postgres, hash_api_key(x_api_key))
     if row is None:
         raise ApiError(status_code=401, code="unauthorized", message="Invalid or revoked API key")
 

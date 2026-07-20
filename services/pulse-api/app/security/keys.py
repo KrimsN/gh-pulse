@@ -1,9 +1,9 @@
 """Выпуск и хранение API-ключей.
 
 Сырой ключ существует только в момент генерации — в БД лежит его SHA-256 (см. схему `api_keys` в
-`docs/ARCHITECTURE.md`, задача 2.5). Единственный вызывающий сейчас — CLI `app/cli.py`; проверка
-ключа на входящий запрос и rate limiting (задача 2.6) будут читать ту же колонку тем же хэшем, но
-сам lookup-путь здесь не заводим заранее — YAGNI до реального вызывающего кода.
+`docs/ARCHITECTURE.md`, задача 2.5). Выпуск — CLI `app/cli.py`; проверка входящего запроса
+(`app/security/api_key.py`, задача 2.6) и `/admin` Basic Auth (`app/admin/auth.py`, задача 4.4)
+читают ту же колонку тем же хэшем через `find_active_key`.
 """
 
 import hashlib
@@ -36,6 +36,21 @@ def hash_api_key(raw_key: str) -> str:
         Hex-строка SHA-256 (64 символа).
     """
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+async def find_active_key(pool: asyncpg.Pool, key_hash: str) -> asyncpg.Record | None:
+    """Найти неотозванный ключ по хэшу — общий lookup для `X-API-Key` и `/admin` Basic Auth.
+
+    Оба механизма (`app/security/api_key.py`, `app/admin/auth.py`) проверяют один и тот же секрет
+    против одной и той же таблицы; вынесено сюда, чтобы инвариант «отозванный ключ не проходит»
+    жил в одном месте, а не дублировался в двух похожих `SELECT`.
+
+    Returns:
+        Строку `api_keys` (с `id`, `owner`, `rate_limit`) либо `None`, если ключ не найден/отозван.
+    """
+    return await pool.fetchrow(
+        "SELECT id, owner, rate_limit FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL", key_hash
+    )
 
 
 async def insert_api_key(connection: asyncpg.Connection, *, owner: str, rate_limit: int, key_hash: str) -> int:
