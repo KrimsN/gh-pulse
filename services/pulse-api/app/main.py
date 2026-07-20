@@ -71,11 +71,12 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
     ждёт (отсюда `noqa: RUF029`) — sync-обработчик Starlette погнал бы через threadpool.
 
     Returns:
-        Ответ 500 с телом `{"error": ..., "trace_id": ...}`.
+        Ответ 500 в том же конверте `{"error": {"code", "message"}}`, что и `ApiError`
+        (`app/core/errors.py`), плюс `trace_id` рядом.
     """
     trace_id = structlog.contextvars.get_contextvars().get("trace_id")
     return JSONResponse(
-        content={"error": "internal_error", "trace_id": trace_id},
+        content={"error": {"code": "internal_error", "message": "Internal server error"}, "trace_id": trace_id},
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
 

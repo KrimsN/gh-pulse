@@ -136,7 +136,7 @@ async def test_lifespan_connects_real_dependencies_and_closes_them_on_shutdown(
 
     assert trending_response.status_code == 500
     body = trending_response.json()
-    assert body["error"] == "internal_error"
+    assert body["error"]["code"] == "internal_error"
     assert body["trace_id"]
 
     # После выхода из `with` `AsyncExitStack` обязан закрыть всех трёх клиентов (задача 2.12) —
