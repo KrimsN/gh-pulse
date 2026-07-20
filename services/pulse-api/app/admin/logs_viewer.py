@@ -1,7 +1,7 @@
 """Чтение хвоста лог-файлов сервисов — для `/admin/logs` (задача 4.4).
 
-Только на чтение с локальной файловой системы (bind mount `./logs`, см. `app/config.py:admin_log_dir`)
-— без обращения к Docker API, тот же принцип, что и решение по бэкфилу в `app/backfill.py`: веб-роут
+Только на чтение с локальной файловой системы (bind mount `./logs`, см. `app/core/config.py:admin_log_dir`)
+— без обращения к Docker API, тот же принцип, что и решение по бэкфилу в `app/admin/backfill.py`: веб-роут
 не получает привилегированного доступа к хосту ради одной функции админ-панели.
 """
 
@@ -25,7 +25,7 @@ def read_log_tail(log_dir: Path, service: AdminService, lines: int, level: str |
     поля для разбора across трёх форматов нет, а substring-фильтр работает одинаково для всех.
 
     Args:
-        log_dir: Каталог с файлами логов (`app/config.py:admin_log_dir`).
+        log_dir: Каталог с файлами логов (`app/core/config.py:admin_log_dir`).
         service: Какой из трёх сервисов читать.
         lines: Сколько последних строк вернуть.
         level: Опциональная подстрока для фильтра (например, `"ERROR"`); регистронезависимая.

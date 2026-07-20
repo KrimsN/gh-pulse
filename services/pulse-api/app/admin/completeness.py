@@ -1,8 +1,8 @@
 """Наполненность данных `events` по часам — для `/admin` (задача 4.4).
 
 Разделено на SQL-сборку (`build_present_hours_query`, требует ClickHouse) и чистую функцию
-(`compute_missing_hours`, без датастора) тем же приёмом, что и `app/queries.py` — вторая проверяется
-юнит-тестом напрямую, без testcontainers (см. докстроку `app/queries.py`).
+(`compute_missing_hours`, без датастора) тем же приёмом, что и `app/api/queries.py` — вторая проверяется
+юнит-тестом напрямую, без testcontainers (см. докстроку `app/api/queries.py`).
 """
 
 from datetime import UTC, datetime, timedelta

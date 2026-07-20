@@ -7,7 +7,7 @@
 
 from typing import get_args
 
-from app.models import Weekday, WeekdayName
+from app.api.schemas import Weekday, WeekdayName
 
 
 def test_weekday_enum_names_match_external_string_literal_exactly() -> None:

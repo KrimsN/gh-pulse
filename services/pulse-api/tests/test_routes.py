@@ -11,8 +11,8 @@ import httpx
 import pytest
 from prometheus_client import CONTENT_TYPE_LATEST
 
-from app.auth import enforce_rate_limit
 from app.main import app
+from app.security.api_key import enforce_rate_limit
 
 
 async def test_metrics_returns_prometheus_exposition() -> None:
@@ -51,7 +51,7 @@ async def test_trending_rejects_unknown_query_param() -> None:
 
 
 # /api/v1/trending — с задачи 2.6 защищённый эндпоинт: без валидного X-API-Key любой запрос
-# получает 401 ещё до собственной валидации параметров (см. app/auth.py, зависимость
+# получает 401 ещё до собственной валидации параметров (см. app/security/api_key.py, зависимость
 # исполняется раньше query-параметров эндпоинта). Тесты на 422 ниже проверяют именно валидацию
 # параметров, поэтому глушат `enforce_rate_limit` через dependency_overrides — не поднимая ради
 # этого ClickHouse/PostgreSQL/Redis.

@@ -2,8 +2,8 @@
 
 import pytest
 
-from app.errors import ApiError
-from app.pagination import TrendingCursor, decode_cursor, encode_cursor
+from app.api.pagination import TrendingCursor, decode_cursor, encode_cursor
+from app.core.errors import ApiError
 
 
 def test_encode_decode_roundtrip() -> None:

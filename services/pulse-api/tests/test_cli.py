@@ -19,7 +19,7 @@ from pydantic import SecretStr
 
 import app.cli as cli_module
 from app.cli import main
-from app.config import Settings
+from app.core.config import Settings
 
 
 async def test_main_create_key_inserts_row_and_prints_raw_key_once(

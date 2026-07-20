@@ -13,8 +13,8 @@ import asyncio
 
 import asyncpg
 
-from app.config import get_settings
-from app.keys import generate_api_key, hash_api_key, insert_api_key
+from app.core.config import get_settings
+from app.security.keys import generate_api_key, hash_api_key, insert_api_key
 
 
 async def _create_key(*, owner: str, rate_limit: int) -> None:

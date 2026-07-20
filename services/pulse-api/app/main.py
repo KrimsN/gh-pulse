@@ -9,13 +9,13 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from app.admin_routes import router as admin_router
+from app.admin.routes import router as admin_router
 from app.api.routes import router
-from app.config import get_settings
-from app.errors import ApiError, api_error_handler
-from app.logging_config import configure_logging
-from app.middleware import TraceIdMiddleware
-from app.tracing import setup_tracing
+from app.core.config import get_settings
+from app.core.errors import ApiError, api_error_handler
+from app.core.logging_config import configure_logging
+from app.core.middleware import TraceIdMiddleware
+from app.core.tracing import setup_tracing
 
 # До импорта этого модуля uvicorn уже применил свой dictConfig — наша настройка перекрывает его, и
 # логи старта приложения выходят JSON'ом наравне с остальными.

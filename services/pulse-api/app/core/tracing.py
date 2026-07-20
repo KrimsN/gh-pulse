@@ -3,7 +3,7 @@
 Обоснование OTLP/gRPC + Jaeger и того, почему это не единое дерево span'ов от приёма события до
 ответа API, — docs/adr/0009-opentelemetry-tracing-jaeger.md. Span на HTTP-запрос создаёт
 `FastAPIInstrumentor` (app/main.py) автоинструментацией — здесь только сам `TracerProvider`;
-`TraceIdMiddleware` (app/middleware.py) читает его trace_id как есть, вместо генерации своего.
+`TraceIdMiddleware` (app/core/middleware.py) читает его trace_id как есть, вместо генерации своего.
 """
 
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -18,7 +18,7 @@ def setup_tracing(service_name: str) -> TracerProvider:
 
     Эндпоинт коллектора берётся из стандартной переменной окружения `OTEL_EXPORTER_OTLP_ENDPOINT` —
     `OTLPSpanExporter()` без явного `endpoint` читает её сама (часть спецификации OTel SDK), отдельное
-    поле в `app.config.Settings` под неё заводить незачем.
+    поле в `app.core.config.Settings` под неё заводить незачем.
 
     Args:
         service_name: Имя сервиса в атрибуте ресурса `service.name` — по нему span'ы отличаются в

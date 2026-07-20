@@ -6,8 +6,8 @@
 
 from typing import Final
 
-from app.models import TrendsWindow, Window
-from app.pagination import TrendingCursor
+from app.api.pagination import TrendingCursor
+from app.api.schemas import TrendsWindow, Window
 
 WINDOW_SECONDS: Final[dict[Window, int]] = {"1h": 3600, "24h": 86400, "7d": 604800}
 TRENDS_WINDOW_DAYS: Final[dict[TrendsWindow, int]] = {"7d": 7, "30d": 30, "90d": 90}
@@ -15,7 +15,7 @@ TRENDS_WINDOW_DAYS: Final[dict[TrendsWindow, int]] = {"7d": 7, "30d": 30, "90d":
 # Keyset-условие пагинации (задача 2.7) — общее для обоих путей `build_trending_query`, оба
 # заканчивают `GROUP BY repo_id` со `stars` как агрегатным алиасом, поэтому условие идёт в HAVING,
 # а не WHERE (алиас агрегата недоступен до группировки). Разбор условия — в докстроке
-# `app/pagination.py`.
+# `app/api/pagination.py`.
 _CURSOR_HAVING = """
             HAVING stars < {cursor_stars:UInt64}
                 OR (stars = {cursor_stars:UInt64} AND repo_id > {cursor_repo_id:UInt64})"""

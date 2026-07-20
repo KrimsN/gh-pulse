@@ -27,8 +27,8 @@ from testcontainers.clickhouse import ClickHouseContainer
 from testcontainers.kafka import RedpandaContainer
 
 from app.api.routes import router
-from app.errors import ApiError, api_error_handler
-from app.keys import generate_api_key, hash_api_key, insert_api_key
+from app.core.errors import ApiError, api_error_handler
+from app.security.keys import generate_api_key, hash_api_key, insert_api_key
 from consumer.config import Settings
 from consumer.consumer import run
 from consumer.dlq import DlqProducer

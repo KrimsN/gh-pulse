@@ -4,8 +4,8 @@
 обычным юнит-тестом (правило проекта — никаких моков для датасторов, а тут его и нет).
 """
 
-from app.pagination import TrendingCursor
-from app.queries import (
+from app.api.pagination import TrendingCursor
+from app.api.queries import (
     TRENDS_WINDOW_DAYS,
     WINDOW_SECONDS,
     build_heatmap_query,

@@ -11,7 +11,7 @@
 import asyncpg
 from testcontainers.postgres import PostgresContainer
 
-from app.keys import generate_api_key, hash_api_key, insert_api_key
+from app.security.keys import generate_api_key, hash_api_key, insert_api_key
 
 from .conftest import asyncpg_dsn, downgrade_base, upgrade_head
 

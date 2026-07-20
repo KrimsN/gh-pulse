@@ -1,6 +1,6 @@
 """ETag + условные запросы (`If-None-Match` → 304) поверх уже сериализованного тела (задача 2.7).
 
-Отделено от `app/cache.py`: тот модуль отвечает за Redis-кэш (`/trending`, `/languages/trends`,
+Отделено от `app/api/cache.py`: тот модуль отвечает за Redis-кэш (`/trending`, `/languages/trends`,
 задача 2.6) и уже считает свой `ETag` от сохранённого тела. Этот модуль не завязан на Redis —
 `conditional_response` одинаково обслуживает и Redis-кэшированные ответы (заголовки уже посчитаны
 `cached_json_response`), и агрегаты без серверного кэша (`repo_card`, `activity_heatmap`, `stats`),

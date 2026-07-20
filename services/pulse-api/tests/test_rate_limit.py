@@ -10,8 +10,8 @@ import asyncio
 import pytest
 from redis.asyncio import Redis
 
-from app import rate_limit
-from app.rate_limit import check_rate_limit
+from app.security import rate_limit
+from app.security.rate_limit import check_rate_limit
 
 
 async def test_allows_requests_up_to_limit(redis_client: Redis) -> None:

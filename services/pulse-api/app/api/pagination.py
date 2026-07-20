@@ -5,7 +5,7 @@
 (`repo_stars_hourly_mv`, задача 2.1), который продолжает меняться между запросами двух соседних
 страниц одного клиента — `OFFSET` при вставке новой лидирующей строки сдвинул бы всю пагинацию и
 дал бы дубликаты или пропуски на границе страниц. Условие `stars < cursor_stars OR (stars =
-cursor_stars AND repo_id > cursor_repo_id)` (см. `build_trending_query` в `app/queries.py`) в
+cursor_stars AND repo_id > cursor_repo_id)` (см. `build_trending_query` в `app/api/queries.py`) в
 терминах `ORDER BY stars DESC, repo_id ASC` не зависит от того, что вставилось выше текущей позиции.
 
 `rank` в курсоре не участвует в этом условии — это просто продолжение сквозной нумерации:
@@ -16,7 +16,7 @@ import base64
 import json
 from dataclasses import dataclass
 
-from app.errors import ApiError
+from app.core.errors import ApiError
 
 
 @dataclass(frozen=True, slots=True)

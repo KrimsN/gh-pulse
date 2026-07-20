@@ -1,6 +1,6 @@
 """Аутентификация `/admin` через HTTP Basic Auth (задача 4.4).
 
-Отдельный механизм от `app/auth.py` (`X-API-Key`), хотя секрет тот же самый — сырой API-ключ,
+Отдельный механизм от `app/security/api_key.py` (`X-API-Key`), хотя секрет тот же самый — сырой API-ключ,
 сверяемый с тем же хэшем в `api_keys`. Basic Auth выбран не из-за иного секрета, а из-за иного
 транспорта: обычные переходы по ссылкам внутри `/admin` не позволяют подставлять кастомный заголовок
 на лету, а браузер, получив `401` с `WWW-Authenticate: Basic`, один раз запрашивает пароль системным
@@ -15,8 +15,8 @@ from typing import Annotated
 from fastapi import Depends, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from app.errors import ApiError
-from app.keys import hash_api_key
+from app.core.errors import ApiError
+from app.security.keys import hash_api_key
 
 security = HTTPBasic()
 
@@ -24,7 +24,7 @@ security = HTTPBasic()
 async def require_admin_auth(request: Request, credentials: Annotated[HTTPBasicCredentials, Depends(security)]) -> None:
     """Проверить пароль Basic-диалога (сырой API-ключ) против `api_keys`, иначе прервать запрос 401-м.
 
-    `secrets.compare_digest` здесь не нужен той же логике, что и `require_api_key` (`app/auth.py`):
+    `secrets.compare_digest` здесь не нужен той же логике, что и `require_api_key` (`app/security/api_key.py`):
     сравнение идёт не в Python-коде над самим секретом, а в `WHERE key_hash = $1` внутри PostgreSQL —
     сторона-наблюдатель может измерить время лишь sha256-хэша пароля, что не раскрывает сам ключ.
 

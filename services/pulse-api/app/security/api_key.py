@@ -2,7 +2,7 @@
 
 Ключ передаётся заголовком `X-API-Key` — не `Authorization: Bearer`, чтобы не намекать на
 OAuth/JWT-семантику, которой в проекте осознанно нет (см. «Осознанно не делаем» в
-`docs/ARCHITECTURE.md`). В БД лежит только SHA-256 ключа (`app/keys.py`) — проверка ключа
+`docs/ARCHITECTURE.md`). В БД лежит только SHA-256 ключа (`app/security/keys.py`) — проверка ключа
 считает тот же хэш и ищет его в `api_keys`, сырой ключ никогда не сравнивается напрямую.
 """
 
@@ -11,9 +11,9 @@ from typing import Annotated
 
 from fastapi import Depends, Header, Request
 
-from app.errors import ApiError
-from app.keys import hash_api_key
-from app.rate_limit import check_rate_limit
+from app.core.errors import ApiError
+from app.security.keys import hash_api_key
+from app.security.rate_limit import check_rate_limit
 
 
 @dataclass(frozen=True, slots=True)

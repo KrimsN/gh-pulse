@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.logs_viewer import read_log_tail
+from app.admin.logs_viewer import read_log_tail
 
 
 def test_read_log_tail_returns_empty_list_when_file_missing(tmp_path: Path) -> None:

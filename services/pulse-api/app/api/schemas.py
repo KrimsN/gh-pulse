@@ -22,7 +22,7 @@ class TrendingResponse(BaseModel):
     items: list[TrendingItem]
     next_cursor: str | None = Field(
         default=None,
-        description="Курсор следующей страницы (см. `app/pagination.py`); `None`, если страница последняя.",
+        description="Курсор следующей страницы (см. `app/api/pagination.py`); `None`, если страница последняя.",
     )
 
     model_config = ConfigDict(
@@ -173,7 +173,7 @@ class StatsResponse(BaseModel):
 
 
 class ErrorDetail(BaseModel):
-    """Тело поля `error` единого конверта ошибок (см. `app/errors.py`, `docs/ARCHITECTURE.md`)."""
+    """Тело поля `error` единого конверта ошибок (см. `app/core/errors.py`, `docs/ARCHITECTURE.md`)."""
 
     code: str
     message: str
@@ -182,7 +182,7 @@ class ErrorDetail(BaseModel):
 class ErrorResponse(BaseModel):
     """Единый конверт ошибок — используется только для документации в OpenAPI (`responses=` роутов).
 
-    Реальные ошибки собирает `app/errors.py:api_error_handler` напрямую через `JSONResponse`, не
+    Реальные ошибки собирает `app/core/errors.py:api_error_handler` напрямую через `JSONResponse`, не
     через эту модель — она нужна исключительно затем, чтобы `/openapi.json` называл форму ошибки
     по имени, а не молчал о статусах 400/401/404/429 в схеме.
     """

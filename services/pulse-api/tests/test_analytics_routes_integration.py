@@ -27,8 +27,8 @@ from redis.asyncio import Redis
 from testcontainers.clickhouse import ClickHouseContainer
 
 from app.api.routes import router
-from app.errors import ApiError, api_error_handler
-from app.keys import generate_api_key, hash_api_key, insert_api_key
+from app.core.errors import ApiError, api_error_handler
+from app.security.keys import generate_api_key, hash_api_key, insert_api_key
 from consumer.clickhouse import insert_events_batch
 from consumer.model import Event
 

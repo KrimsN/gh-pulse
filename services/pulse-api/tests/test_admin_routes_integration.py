@@ -19,11 +19,11 @@ import pytest
 from fastapi import FastAPI
 from testcontainers.clickhouse import ClickHouseContainer
 
-import app.admin_routes as admin_routes_module
-from app.admin_routes import router as admin_router
-from app.config import Settings
-from app.errors import ApiError, api_error_handler
-from app.keys import generate_api_key, hash_api_key, insert_api_key
+import app.admin.routes as admin_routes_module
+from app.admin.routes import router as admin_router
+from app.core.config import Settings
+from app.core.errors import ApiError, api_error_handler
+from app.security.keys import generate_api_key, hash_api_key, insert_api_key
 from consumer.clickhouse import insert_events_batch
 from consumer.model import Event
 
@@ -96,7 +96,7 @@ def _basic_auth_header(raw_key: str) -> dict[str, str]:
 def _event(event_id: int, created_at: datetime) -> Event:
     # tz-aware UTC — тот же приём, что `datetime.now(UTC)` в test_analytics_routes_integration.py:
     # naive datetime `clickhouse-connect` трактует как локальное время процесса (см. `_as_utc` в
-    # `app/completeness.py`) и сохранил бы это событие сдвинутым на офсет локали хоста.
+    # `app/admin/completeness.py`) и сохранил бы это событие сдвинутым на офсет локали хоста.
     return Event(
         event_id=event_id,
         event_type="WatchEvent",

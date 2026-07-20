@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import structlog
 from structlog.tracebacks import ExceptionDictTransformer
 
-from app.config import LogLevel
+from app.core.config import LogLevel
 
 if TYPE_CHECKING:
     from structlog.typing import Processor

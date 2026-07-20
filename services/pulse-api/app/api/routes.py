@@ -8,12 +8,22 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.auth import enforce_rate_limit
-from app.cache import cached_json_response
-from app.config import get_settings
-from app.helpers import probe_dependency
-from app.http_cache import conditional_response, etag_for
-from app.models import (
+from app.api.cache import cached_json_response
+from app.api.health import probe_dependency
+from app.api.http_cache import conditional_response, etag_for
+from app.api.pagination import TrendingCursor, decode_cursor, encode_cursor
+from app.api.queries import (
+    build_heatmap_query,
+    build_language_coverage_query,
+    build_language_trends_query,
+    build_repo_lookup_query,
+    build_repo_stars_by_day_query,
+    build_repo_stars_total_query,
+    build_stats_query,
+    build_trending_query,
+)
+from app.api.query_params import reject_unknown_query_params
+from app.api.schemas import (
     ErrorResponse,
     HealthResponse,
     HeatmapCell,
@@ -33,21 +43,11 @@ from app.models import (
     WeekdayName,
     Window,
 )
-from app.pagination import TrendingCursor, decode_cursor, encode_cursor
-from app.queries import (
-    build_heatmap_query,
-    build_language_coverage_query,
-    build_language_trends_query,
-    build_repo_lookup_query,
-    build_repo_stars_by_day_query,
-    build_repo_stars_total_query,
-    build_stats_query,
-    build_trending_query,
-)
-from app.query_params import reject_unknown_query_params
+from app.core.config import get_settings
+from app.security.api_key import enforce_rate_limit
 
 # Задача 2.11: применяется на уровне роутера, а не на каждом эндпоинте — общий механизм для всех
-# текущих и будущих роутов, см. докстроку app/query_params.py.
+# текущих и будущих роутов, см. докстроку app/api/query_params.py.
 router = APIRouter(dependencies=[Depends(reject_unknown_query_params)])
 
 DEPENDENCY_NAMES = ("clickhouse", "postgres", "redis")
@@ -59,7 +59,7 @@ TRENDING_CACHE_TTL_SECONDS = 30
 LANGUAGE_TRENDS_CACHE_TTL_SECONDS = 60
 
 # Cache-Control для эндпоинтов без Redis-кэша (задача 2.7) — `ETag` на них всё равно считается
-# заново на каждый запрос (см. app/http_cache.py), эти константы только подсказка HTTP-кэшам
+# заново на каждый запрос (см. app/api/http_cache.py), эти константы только подсказка HTTP-кэшам
 # клиента/CDN, откалиброванная под то, как часто меняются исходные данные:
 # - heatmap читает всю историю целиком (`activity_hourly_mv`) — новый час меняет один срез
 #   из 168 на едва заметную долю, всплеск свежести не нужен;
@@ -153,13 +153,13 @@ async def trending(
 
     Baseline на прямом скане `ghpulse.events` (задача 1.8/1.9, до появления MV в 2.1) зафиксирован
     в `docs/PERFORMANCE.md` вместе с записью «после» этой оптимизации. Запрос с фильтром `language`
-    остаётся на прямом скане `events` — у MV нет колонки `language` (см. `app/queries.py`).
+    остаётся на прямом скане `events` — у MV нет колонки `language` (см. `app/api/queries.py`).
 
     Ответ кэшируется в Redis на `TRENDING_CACHE_TTL_SECONDS` (задача 2.6), ключ включает все параметры
     запроса, включая `cursor` — `X-Cache: HIT|MISS` показывает, обслужен ли он из кэша. Поддерживает
     `If-None-Match` (задача 2.7): совпавший `ETag` отдаёт 304 без тела.
 
-    Пагинация — keyset-курсор (задача 2.7, разбор алгоритма в `app/pagination.py`), не `OFFSET`:
+    Пагинация — keyset-курсор (задача 2.7, разбор алгоритма в `app/api/pagination.py`), не `OFFSET`:
     список бьёт по горячему агрегату, который меняется между запросами двух страниц одного клиента.
 
     Args:
@@ -169,7 +169,7 @@ async def trending(
         limit: Максимум репозиториев на странице.
         cursor: Курсор страницы, выданный предыдущим ответом в `next_cursor`.
 
-    Битый `cursor` (`app/pagination.py:decode_cursor`) отдаёт 400 — разбор происходит до похода в
+    Битый `cursor` (`app/api/pagination.py:decode_cursor`) отдаёт 400 — разбор происходит до похода в
     ClickHouse/Redis, чужой ввод не долетает до датастора.
 
     Returns:
@@ -279,7 +279,7 @@ async def languages_trends(
 
     Работает по обогащённому подмножеству (`language != ''`): пока обогащение не запущено (задача
     4.3), `series` честно пуст, а `coverage` показывает нулевую долю, а не притворяется полным
-    ответом. `coverage` считается по сырой `events` за то же окно, а не по MV (см. `app/queries.py`).
+    ответом. `coverage` считается по сырой `events` за то же окно, а не по MV (см. `app/api/queries.py`).
 
     Ответ кэшируется в Redis на `LANGUAGE_TRENDS_CACHE_TTL_SECONDS` (задача 2.6) — см. докстроку
     `trending` выше про смысл заголовков `X-Cache`/`Cache-Control`/`ETag`/`If-None-Match`.

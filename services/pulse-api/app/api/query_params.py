@@ -12,7 +12,7 @@ FastAPI по умолчанию молча игнорирует query-парам
 from fastapi import Request, status
 from fastapi.routing import APIRoute
 
-from app.errors import ApiError
+from app.core.errors import ApiError
 
 
 def reject_unknown_query_params(request: Request) -> None:

@@ -6,7 +6,7 @@ PostgreSQL/Redis в `app.state` и их закрытие через `AsyncExitSt
 одним тестом. `TestClient` как контекстный менеджер (`with TestClient(app) as client`), в отличие от
 голого `ASGITransport`, честно проигрывает startup/shutdown.
 
-`app.config.Settings` по умолчанию называет docker-compose хостнеймы (`clickhouse`, `postgres`,
+`app.core.config.Settings` по умолчанию называет docker-compose хостнеймы (`clickhouse`, `postgres`,
 `redis`) — вне контейнерной сети они не резолвятся. `get_settings` подменяется на функцию, отдающую
 те же настройки, но указывающие на настоящие testcontainers: это не мок датастора (протокол тот же
 самый, реальный ClickHouse/PostgreSQL/Redis), только другой адрес — тот же приём, которым остальные
@@ -25,8 +25,8 @@ from testcontainers.clickhouse import ClickHouseContainer
 from testcontainers.redis import RedisContainer
 
 import app.main as main_module
-from app.auth import enforce_rate_limit
-from app.config import Settings
+from app.core.config import Settings
+from app.security.api_key import enforce_rate_limit
 
 # services/pulse-api/tests/ -> parents[3] = корень репозитория, как в test_end_to_end_pipeline.py.
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "clickhouse" / "migrations"
@@ -34,7 +34,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "clickhouse" / 
 
 class _NoAuthClickHouseContainer(ClickHouseContainer):  # type: ignore[misc] # testcontainers без stub'ов, см. pyproject.toml
     """`ClickHouseContainer` библиотеки всегда заводит именованного пользователя (`test`/`test` по
-    умолчанию) — `app.config.Settings` не знает ни логина, ни пароля вовсе (см. docker-compose.yml:
+    умолчанию) — `app.core.config.Settings` не знает ни логина, ни пароля вовсе (см. docker-compose.yml:
     `CLICKHOUSE_SKIP_USER_SETUP: 1`, безпарольный `default`). `lifespan` в `app/main.py` подключается
     без credentials — тестовый контейнер обязан принимать то же самое, иначе тест проверял бы не
     настоящую конфигурацию продакшна, а придуманную для теста.
@@ -107,7 +107,7 @@ async def test_lifespan_connects_real_dependencies_and_closes_them_on_shutdown(
     )
     # `get_settings` кэширован через `lru_cache` и уже вызван один раз при импорте `app.main` с
     # настройками по умолчанию — подменяем саму привязку имени в `app.main`, а не пытаемся сбросить
-    # кэш модуля `app.config`, от которого зависят другие тесты в этом же прогоне pytest.
+    # кэш модуля `app.core.config`, от которого зависят другие тесты в этом же прогоне pytest.
     monkeypatch.setattr(main_module, "get_settings", lambda: test_settings)
 
     # raise_server_exceptions=False: второй запрос ниже намеренно провоцирует необработанное

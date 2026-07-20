@@ -1,6 +1,6 @@
 """Роуты `/admin` — наполненность данных, генератор бэкфила, ссылки на телеметрию, логи (задача 4.4).
 
-Все роуты защищены `require_admin_auth` (HTTP Basic, `app/admin_auth.py`) через `dependencies=`
+Все роуты защищены `require_admin_auth` (HTTP Basic, `app/admin/auth.py`) через `dependencies=`
 роутера — тот же приём, что и `reject_unknown_query_params` в `app/api/routes.py`. `include_in_schema
 =False`: это внутренний эксплуатационный инструмент, а не часть публичного контракта `/api/v1/*`,
 который документирует `/openapi.json` (задача 2.7/2.11).
@@ -18,11 +18,11 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from app.admin_auth import require_admin_auth
-from app.backfill import build_backfill_command
-from app.completeness import build_present_hours_query, compute_missing_hours
-from app.config import get_settings
-from app.logs_viewer import ADMIN_SERVICES, AdminService, read_log_tail
+from app.admin.auth import require_admin_auth
+from app.admin.backfill import build_backfill_command
+from app.admin.completeness import build_present_hours_query, compute_missing_hours
+from app.admin.logs_viewer import ADMIN_SERVICES, AdminService, read_log_tail
+from app.core.config import get_settings
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_auth)], include_in_schema=True)
 
@@ -89,7 +89,7 @@ async def admin_backfill_command(
     end: Annotated[datetime, Query(description="Конец диапазона, UTC, исключая")],
     workers: Annotated[int, Query(ge=1, description="Ширина worker pool'а fetch-стадии gh-collector")] = 8,
 ) -> HTMLResponse:
-    """Фрагмент с готовой командой `gh-collector --backfill ...` для копирования (`app/backfill.py`).
+    """Фрагмент с готовой командой `gh-collector --backfill ...` для копирования (`app/admin/backfill.py`).
 
     Невалидный диапазон (`end <= start`) не 400-т запрос целиком — фрагмент рендерится 200-м с текстом
     ошибки вместо таблицы/команды: это внутренняя HTML-форма, а не эндпоинт `/api/v1/*`, и htmx по
@@ -113,7 +113,7 @@ async def admin_logs(
     lines: Annotated[int, Query(ge=1, le=2000, description="Сколько последних строк вернуть")] = 200,
     level: Annotated[str | None, Query(description="Подстрока фильтра уровня, например ERROR")] = None,
 ) -> HTMLResponse:
-    """Фрагмент с хвостом лог-файла одного из трёх сервисов (`app/logs_viewer.py`).
+    """Фрагмент с хвостом лог-файла одного из трёх сервисов (`app/admin/logs_viewer.py`).
 
     Returns:
         HTML-фрагмент с последними строками лога либо сообщением, что файла ещё нет.

@@ -16,9 +16,9 @@ import pytest
 from fastapi import Depends, FastAPI
 from redis.asyncio import Redis
 
-from app.auth import enforce_rate_limit
-from app.errors import ApiError, api_error_handler
-from app.keys import generate_api_key, hash_api_key, insert_api_key
+from app.core.errors import ApiError, api_error_handler
+from app.security.api_key import enforce_rate_limit
+from app.security.keys import generate_api_key, hash_api_key, insert_api_key
 
 
 def _build_protected_app(postgres_pool: asyncpg.Pool, redis_client: Redis) -> FastAPI:

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from app.backfill import build_backfill_command
+from app.admin.backfill import build_backfill_command
 
 
 def test_build_backfill_command_formats_hour_without_leading_zero() -> None:

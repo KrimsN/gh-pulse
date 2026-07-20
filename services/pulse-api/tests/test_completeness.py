@@ -4,7 +4,7 @@
 
 from datetime import UTC, datetime
 
-from app.completeness import build_present_hours_query, compute_missing_hours
+from app.admin.completeness import build_present_hours_query, compute_missing_hours
 
 
 def test_build_present_hours_query_passes_start_and_end_as_utc_aware_parameters() -> None:

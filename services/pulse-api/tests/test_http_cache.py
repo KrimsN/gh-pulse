@@ -1,4 +1,4 @@
-"""Тесты `app/http_cache.py`: ETag + условные запросы (задача 2.7) — без датасторов.
+"""Тесты `app/api/http_cache.py`: ETag + условные запросы (задача 2.7) — без датасторов.
 
 Через игрушечное FastAPI-приложение (тот же приём, что в `test_auth_and_rate_limit_integration.py`
 для зависимостей): проверяемая логика — сравнение заголовков, ClickHouse/Redis ей не нужны.
@@ -8,7 +8,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
-from app.http_cache import conditional_response, etag_for
+from app.api.http_cache import conditional_response, etag_for
 
 _BODY = b'{"value": 1}'
 _HEADERS = {"Cache-Control": "public, max-age=30", "ETag": etag_for(_BODY)}

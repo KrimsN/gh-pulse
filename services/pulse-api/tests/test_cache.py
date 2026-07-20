@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 import pytest
 from redis.asyncio import Redis
 
-from app.cache import cached_json_response
+from app.api.cache import cached_json_response
 
 
 def _static_body(body: bytes) -> Callable[[], Awaitable[bytes]]:

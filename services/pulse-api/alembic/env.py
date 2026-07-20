@@ -24,7 +24,7 @@ def _get_url() -> str:
     """Вернуть async-DSN для alembic: из alembic.ini, если задан явно (тесты), иначе из настроек сервиса.
 
     В проде/compose alembic.ini не содержит sqlalchemy.url — DSN приходит из того же
-    app.config.get_settings(), которым пользуется сам pulse-api (единый источник, не дублируем
+    app.core.config.get_settings(), которым пользуется сам pulse-api (единый источник, не дублируем
     POSTGRES_DSN во втором месте). asyncpg отдаёт голый "postgresql://", а SQLAlchemy async-движку
     нужен явный драйвер — переписываем схему, если она ещё не указана.
 
@@ -35,7 +35,7 @@ def _get_url() -> str:
     if configured_url:
         return configured_url
 
-    from app.config import get_settings  # локальный импорт: PLC0415 глобально выключен в pyproject.toml
+    from app.core.config import get_settings  # локальный импорт: PLC0415 глобально выключен в pyproject.toml
 
     raw_dsn = get_settings().postgres_dsn.get_secret_value()
     if raw_dsn.startswith("postgresql+"):

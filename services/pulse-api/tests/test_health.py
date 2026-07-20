@@ -8,7 +8,7 @@
 
 import asyncio
 
-from app.helpers import probe_dependency
+from app.api.health import probe_dependency
 
 TIMEOUT_SECONDS = 0.05
 
