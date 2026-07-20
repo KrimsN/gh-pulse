@@ -5,11 +5,15 @@
 тесты ловят именно ту регрессию: схема должна называть реальную модель, а не молчать о теле ответа.
 """
 
+import importlib
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.openapi.utils import get_openapi
 
+import app.admin.routes as admin_routes_module
+from app.core.config import get_settings
 from app.main import app
 
 
@@ -27,6 +31,30 @@ async def test_openapi_json_is_served_and_matches_schema() -> None:
 
     assert response.status_code == httpx.codes.OK
     assert response.json() == _schema()
+
+
+def test_admin_routes_hidden_from_openapi_by_default() -> None:
+    """Регрессия задачи 4.4: `/admin/*` не входит в публичный контракт `/api/v1/*` (см. `app/admin/routes.py`)."""
+    schema = _schema()
+    assert not [path for path in schema["paths"] if path.startswith("/admin")]
+
+
+def test_admin_routes_appear_in_openapi_when_debug_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`include_in_schema` фиксируется в `router` при импорте модуля (`Settings.debug` в момент
+    создания `APIRouter`), поэтому переключение видно только после перезагрузки модуля — ровно так
+    же, как в реальном процессе: `DEBUG=true` должен быть выставлен до старта `pulse-api`, не
+    посреди работы.
+    """
+    monkeypatch.setenv("DEBUG", "true")
+    get_settings.cache_clear()
+    try:
+        importlib.reload(admin_routes_module)
+        schema = get_openapi(title="test", version="0.1.0", routes=admin_routes_module.router.routes)
+        assert any(path.startswith("/admin") for path in schema["paths"])
+    finally:
+        monkeypatch.delenv("DEBUG", raising=False)
+        get_settings.cache_clear()
+        importlib.reload(admin_routes_module)
 
 
 async def test_docs_ui_is_served() -> None:

@@ -1,9 +1,10 @@
 """Роуты `/admin` — наполненность данных, генератор бэкфила, ссылки на телеметрию, логи (задача 4.4).
 
 Все роуты защищены `require_admin_auth` (HTTP Basic, `app/admin/auth.py`) через `dependencies=`
-роутера — тот же приём, что и `reject_unknown_query_params` в `app/api/routes.py`. `include_in_schema
-=False`: это внутренний эксплуатационный инструмент, а не часть публичного контракта `/api/v1/*`,
-который документирует `/openapi.json` (задача 2.7/2.11).
+роутера — тот же приём, что и `reject_unknown_query_params` в `app/api/routes.py`. `include_in_schema`
+берётся из `Settings.debug`: по умолчанию `False` — это внутренний эксплуатационный инструмент, а не
+часть публичного контракта `/api/v1/*`, который документирует `/openapi.json` (задача 2.7/2.11).
+`DEBUG=true` в окружении включает `/admin/*` обратно в схему — для удобства при локальной разработке.
 
 Даты (`start`/`end`) приходят из HTML `<input type="datetime-local">` без смещения — FastAPI/pydantic
 разбирает такую строку в naive `datetime`, что ровно совпадает с тем, как ClickHouse хранит и
@@ -24,7 +25,7 @@ from app.admin.completeness import build_present_hours_query, compute_missing_ho
 from app.admin.logs_viewer import ADMIN_SERVICES, AdminService, read_log_tail
 from app.core.config import get_settings
 
-router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_auth)], include_in_schema=True)
+router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_auth)], include_in_schema=get_settings().debug)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)

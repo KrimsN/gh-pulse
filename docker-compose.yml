@@ -212,6 +212,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FILE: /var/log/ghpulse/pulse-api.log
+      # По умолчанию false — /admin/* не попадает в /openapi.json даже в этом compose (парадная
+      # дверь репозитория не меняет вид /docs). DEBUG=true в .env локально включает его обратно.
+      DEBUG: ${DEBUG:-false}
       OTEL_SERVICE_NAME: pulse-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     ports:

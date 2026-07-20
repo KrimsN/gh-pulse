@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     log_level: LogLevel = "INFO"
     app_version: str = "0.1.0"
 
+    # Выключает часть поведения, рассчитанного на публичную демонстрацию (задача 4.4): пока `False`,
+    # `/admin/*` не попадает в `/openapi.json` — внутренний эксплуатационный инструмент не часть
+    # публичного контракта `/api/v1/*`. `DEBUG=true` в окружении разработки включает его обратно —
+    # удобно смотреть и пробовать эндпоинты прямо в `/docs`, не читая исходники admin/routes.py.
+    debug: bool = False
+
     # Путь файла структурного JSON-лога этого сервиса (задача 4.4). `None` — поведение не меняется,
     # пишем только в stdout (`logging.StreamHandler`), как и раньше. Заполняется `LOG_FILE` в
     # `docker-compose.yml`, указывает внутрь bind mount `./logs:/var/log/ghpulse`.
