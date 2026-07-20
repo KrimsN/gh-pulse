@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>GH Pulse — admin</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; color: #1a1a1a; }
+    h1 { margin-bottom: 0.25rem; }
+    section { margin-bottom: 2.5rem; }
+    h2 { border-bottom: 1px solid #ccc; padding-bottom: 0.25rem; }
+    label { display: inline-block; margin-right: 1rem; }
+    input, select { margin-left: 0.25rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 0.25rem 0.5rem; text-align: left; }
+    pre { background: #f4f4f4; padding: 0.75rem; overflow-x: auto; white-space: pre-wrap; }
+    .links a { margin-right: 1rem; }
+    .htmx-indicator { opacity: 0; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1>GH Pulse — admin</h1>
+  <p>Внутренний инструмент эксплуатации: наполненность данных, генератор бэкфила, телеметрия, логи.</p>
+
+  <section>
+    <h2>Наполненность данных</h2>
+    <form hx-get="/admin/completeness" hx-target="#completeness-result" hx-trigger="submit, load">
+      <label>С <input type="datetime-local" name="start" value="{{ default_start }}"></label>
+      <label>По <input type="datetime-local" name="end" value="{{ default_end }}"></label>
+      <button type="submit">Проверить</button>
+    </form>
+    <div id="completeness-result">Загрузка…</div>
+  </section>
+
+  <section>
+    <h2>Генератор бэкфила</h2>
+    <p>Команда только формируется здесь — <code>pulse-api</code> её не запускает. Выполнять из
+      <code>services/gh-collector</code> собранным бинарником или <code>go run ./cmd/gh-collector</code>.</p>
+    <form hx-get="/admin/backfill-command" hx-target="#backfill-result">
+      <label>С <input type="datetime-local" name="start"></label>
+      <label>По <input type="datetime-local" name="end"></label>
+      <label>Воркеры <input type="number" name="workers" value="8" min="1" style="width: 4rem"></label>
+      <button type="submit">Сформировать команду</button>
+    </form>
+    <div id="backfill-result"></div>
+  </section>
+
+  <section class="links">
+    <h2>Телеметрия</h2>
+    <a href="{{ grafana_url }}" target="_blank" rel="noopener">Grafana</a>
+    <a href="{{ prometheus_url }}" target="_blank" rel="noopener">Prometheus</a>
+    <a href="{{ jaeger_url }}" target="_blank" rel="noopener">Jaeger</a>
+    <a href="/docs" target="_blank" rel="noopener">OpenAPI</a>
+    <a href="https://github.com/KrimsN/gh-pulse/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md</a>
+  </section>
+
+  <section>
+    <h2>Логи</h2>
+    <form hx-get="/admin/logs" hx-target="#logs-result" hx-trigger="submit, load">
+      <label>Сервис
+        <select name="service">
+          {% for service in services %}
+          <option value="{{ service }}">{{ service }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Строк <input type="number" name="lines" value="200" min="1" max="2000" style="width: 5rem"></label>
+      <label>Фильтр по уровню <input type="text" name="level" placeholder="ERROR"></label>
+      <button type="submit">Показать</button>
+    </form>
+    <div id="logs-result">Загрузка…</div>
+  </section>
+</body>
+</html>

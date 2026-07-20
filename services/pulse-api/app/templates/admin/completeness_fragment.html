@@ -1,0 +1,16 @@
+<p>
+  Диапазон {{ start.isoformat() }} — {{ end.isoformat() }} (искл.): {{ total_hours }} час(ов),
+  из них без данных — {{ missing_hours|length }}.
+</p>
+{% if missing_hours %}
+<table>
+  <thead><tr><th>Час без данных (UTC)</th></tr></thead>
+  <tbody>
+    {% for hour in missing_hours %}
+    <tr><td>{{ hour.isoformat() }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Пропусков нет — диапазон покрыт полностью.</p>
+{% endif %}

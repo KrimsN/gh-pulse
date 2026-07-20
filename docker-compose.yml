@@ -211,10 +211,18 @@ services:
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-ghpulse}:${POSTGRES_PASSWORD:-ghpulse}@postgres:5432/${POSTGRES_DB:-ghpulse}
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FILE: /var/log/ghpulse/pulse-api.log
       OTEL_SERVICE_NAME: pulse-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     ports:
       - "127.0.0.1:8000:8000"
+    # Bind mount, не именованный volume (задача 4.4): `gh-collector` — CLI на хосте (см. комментарий
+    # у jaeger выше), а не сервис compose, и пишет в тот же хостовый каталог `./logs` напрямую, минуя
+    # Docker. Именованный volume этого не позволил бы — Docker хранит его в собственном месте, не на
+    # пути, видимом хост-процессу. `/admin/logs` (эта же служба) читает все три файла из одного
+    # каталога, потому что для всех троих он в итоге один и тот же на хосте.
+    volumes:
+      - ./logs:/var/log/ghpulse
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -246,10 +254,14 @@ services:
       KAFKA_TOPIC: ${KAFKA_TOPIC:-gh.events}
       KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-gh.events.dlq}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FILE: /var/log/ghpulse/pulse-consumer.log
       OTEL_SERVICE_NAME: pulse-consumer
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     ports:
       - "127.0.0.1:8001:8001"
+    # Тот же bind mount и то же обоснование, что у pulse-api выше.
+    volumes:
+      - ./logs:/var/log/ghpulse
     depends_on:
       clickhouse:
         condition: service_healthy

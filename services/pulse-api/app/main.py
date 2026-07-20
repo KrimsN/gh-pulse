@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
+from app.admin_routes import router as admin_router
 from app.api.routes import router
 from app.config import get_settings
 from app.errors import ApiError, api_error_handler
@@ -18,7 +19,7 @@ from app.tracing import setup_tracing
 
 # До импорта этого модуля uvicorn уже применил свой dictConfig — наша настройка перекрывает его, и
 # логи старта приложения выходят JSON'ом наравне с остальными.
-configure_logging(get_settings().log_level)
+configure_logging(get_settings().log_level, get_settings().log_file)
 
 # На уровне модуля, а не внутри lifespan: FastAPIInstrumentor.instrument_app ниже оборачивает ASGI-
 # приложение один раз при импорте, и TracerProvider обязан существовать до этого момента — иначе
@@ -84,6 +85,7 @@ app.add_middleware(TraceIdMiddleware)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.add_exception_handler(ApiError, api_error_handler)
 app.include_router(router)
+app.include_router(admin_router)
 # Оборачивает ASGI-приложение целиком (не add_middleware) — span запроса открывается снаружи
 # TraceIdMiddleware, поэтому она видит уже активный span и берёт его trace_id как есть (ADR 0009).
 FastAPIInstrumentor.instrument_app(app)

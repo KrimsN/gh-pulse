@@ -27,7 +27,7 @@ from consumer.tracing import setup_tracing
 # Точка входа целиком исключена из покрытия pragma-комментариями — process-wiring уже проверяется
 # docker-smoke (/health на живом окружении в CI), юнит-тест с моком ClickHouse/Kafka/сигналов здесь
 # был бы фейковым покрытием ради процента.
-configure_logging(get_settings().log_level)  # pragma: no cover
+configure_logging(get_settings().log_level, get_settings().log_file)  # pragma: no cover
 
 logger = structlog.get_logger()
 

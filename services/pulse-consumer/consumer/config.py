@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     log_level: LogLevel = "INFO"
     app_version: str = "0.1.0"
 
+    # Путь файла структурного JSON-лога этого сервиса (задача 4.4, `/admin/logs` в pulse-api).
+    # `None` — поведение не меняется, пишем только в stdout. Заполняется `LOG_FILE` в
+    # `docker-compose.yml`, указывает внутрь bind mount `./logs:/var/log/ghpulse`.
+    log_file: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

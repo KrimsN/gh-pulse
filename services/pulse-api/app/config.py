@@ -25,6 +25,23 @@ class Settings(BaseSettings):
     log_level: LogLevel = "INFO"
     app_version: str = "0.1.0"
 
+    # Путь файла структурного JSON-лога этого сервиса (задача 4.4). `None` — поведение не меняется,
+    # пишем только в stdout (`logging.StreamHandler`), как и раньше. Заполняется `LOG_FILE` в
+    # `docker-compose.yml`, указывает внутрь bind mount `./logs:/var/log/ghpulse`.
+    log_file: str | None = None
+
+    # Каталог, где лежат файлы логов всех трёх сервисов (задача 4.4, `/admin/logs`) — тот же bind
+    # mount `./logs:/var/log/ghpulse`, что и `log_file` выше, но общий на всех троих (`gh-collector`
+    # пишет туда напрямую с хоста, минуя Docker, см. «Архитектурные решения» задачи 4.4).
+    admin_log_dir: str = "/var/log/ghpulse"
+
+    # Ссылки на телеметрию для `/admin` (задача 4.4) — те же порты, что публикует `docker-compose.yml`
+    # на loopback хоста; отдельного service discovery не заводим, значения совпадают с константами
+    # `docker-compose.yml` по построению.
+    grafana_url: str = "http://localhost:3000"
+    prometheus_url: str = "http://localhost:9090"
+    jaeger_url: str = "http://localhost:16686"
+
     # Ограничение на одну проверку зависимости в /health. Проба обязана ответить «жив/мёртв» за
     # предсказуемое время: зависший датастор не должен подвешивать сам эндпоинт.
     health_check_timeout_seconds: float = 2.0

@@ -1,0 +1,6 @@
+{% if error %}
+<p style="color: #b00020">{{ error }}</p>
+{% else %}
+<pre id="backfill-command">{{ command }}</pre>
+<button type="button" onclick="navigator.clipboard.writeText(document.getElementById('backfill-command').textContent)">Копировать</button>
+{% endif %}

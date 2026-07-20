@@ -243,6 +243,9 @@ data/*
 /infra/volumes/
 clickhouse-data/
 pg-data/
+# Bind mount логов трёх сервисов (задача 4.4, docker-compose.yml + `/admin/logs`) — рантайм-вывод,
+# не исходники; каталог создаёт сам Docker при первом `docker compose up`.
+/logs/
 
 # ОС и IDE
 .DS_Store

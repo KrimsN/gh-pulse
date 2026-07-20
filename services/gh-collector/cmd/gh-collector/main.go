@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/archive"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/events"
+	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/logfile"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/producer"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/tracing"
@@ -118,6 +120,9 @@ func run(args []string) error {
 		"токен GitHub для --live (или переменная окружения GITHUB_TOKEN); без токена поллинг неаутентифицированный (60 запросов/час вместо 5000)")
 	otelEndpoint := fs.String("otel-endpoint", envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
 		"адрес OTLP/gRPC-приёмника трассировки, обычно Jaeger (или переменная окружения OTEL_EXPORTER_OTLP_ENDPOINT), см. ADR 0009")
+	logFilePath := fs.String("log-file", envOr("LOG_FILE", ""),
+		"путь файла для второго (файлового) вывода лога, в дополнение к stderr (или переменная окружения LOG_FILE); "+
+			"пусто (по умолчанию) — пишем только в stderr, см. задачу 4.4")
 
 	if err := fs.Parse(rest); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
@@ -223,7 +228,22 @@ func run(args []string) error {
 		_ = shutdownTracing(shutdownCtx)
 	}()
 
-	prod, err := producer.New(ctx, producer.Config{Brokers: brokers, Topic: *kafkaTopic}, producerMetrics, nil)
+	// Файловый лог (задача 4.4) — второй вывод рядом со stderr, не вместо него: `docker compose logs`
+	// (для сервисов-контейнеров) и обычный терминал (для gh-collector, CLI на хосте) не должны
+	// потерять вывод только из-за того, что появился файл. Пустой *logFilePath (по умолчанию) не
+	// открывает ничего — logger остаётся nil, и все три конструктора ниже сами подставляют
+	// log.Default() (тот же stderr, что и раньше этой задачи).
+	var logger *log.Logger
+	if *logFilePath != "" {
+		lf, err := logfile.New(*logFilePath, logfile.DefaultMaxBytes)
+		if err != nil {
+			return fmt.Errorf("open log file: %w", err)
+		}
+		defer func() { _ = lf.Close() }()
+		logger = log.New(io.MultiWriter(os.Stderr, lf), "", log.LstdFlags)
+	}
+
+	prod, err := producer.New(ctx, producer.Config{Brokers: brokers, Topic: *kafkaTopic}, producerMetrics, logger)
 	if err != nil {
 		return fmt.Errorf("build producer: %w", err)
 	}
@@ -237,11 +257,11 @@ func run(args []string) error {
 			fmt.Fprintln(os.Stderr, "gh-collector: GITHUB_TOKEN не задан — поллинг Events API "+
 				"неаутентифицированный (лимит 60 запросов/час вместо 5000)")
 		}
-		eventsClient := events.NewClient(*githubToken, eventsMetrics, nil)
+		eventsClient := events.NewClient(*githubToken, eventsMetrics, logger)
 		return runLive(ctx, eventsClient, prod, *shutdownTimeout, os.Stdout, os.Stderr)
 	}
 
-	archiveClient := archive.NewClient(archiveMetrics, nil)
+	archiveClient := archive.NewClient(archiveMetrics, logger)
 	return orchestrate(ctx, archiveClient, prod, pipelineConfig{
 		hours:           hours,
 		workers:         *workers,

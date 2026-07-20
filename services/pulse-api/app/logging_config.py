@@ -5,6 +5,7 @@ ProcessorFormatter + перенастройка логгеров uvicorn» и з
 """
 
 import logging
+import logging.handlers
 from typing import TYPE_CHECKING
 
 import structlog
@@ -21,12 +22,20 @@ if TYPE_CHECKING:
 # поток вручную: другого способа нет, пока uvicorn конфигурирует логирование сам.
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
+# Ротация по размеру (задача 4.4) — это dev/demo-инструмент (bind mount `./logs`, читает `/admin`),
+# не production log pipeline: 10 МБ × 3 бэкапа достаточно, чтобы не разрастись за время демо-сессии,
+# ELK/Loki и настоящую retention-политику здесь заводить незачем.
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUP_COUNT = 3
 
-def configure_logging(log_level: LogLevel) -> None:
+
+def configure_logging(log_level: LogLevel, log_file: str | None = None) -> None:
     """Собирает единый JSON-поток логов — и своих записей, и записей сторонних библиотек.
 
     Args:
         log_level: Уровень root-логгера; его наследуют все логгеры без собственного уровня.
+        log_file: Путь файла для второго (файлового) обработчика, в дополнение к stdout (задача 4.4,
+            `/admin/logs`). `None` (по умолчанию) — поведение не меняется, пишем только в stdout.
     """
     shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -63,6 +72,14 @@ def configure_logging(log_level: LogLevel) -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
+
+    if log_file:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUP_COUNT
+        )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
     root.setLevel(log_level)
 
     for name in UVICORN_LOGGERS:

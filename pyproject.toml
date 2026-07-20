@@ -144,6 +144,13 @@ ignore = [
 # обычным модулем, который alembic импортирует по пути, а не через python-пакет `alembic.env`, так
 # что implicit-namespace-package здесь не баг, а форма, которую требует сам alembic.
 "services/pulse-api/alembic/env.py" = ["INP001"]
+# Три тестовых файла задачи 4.4 намеренно строят naive `datetime()`-литералы: `compute_missing_hours`
+# и `build_backfill_command` работают с тем же naive-представлением, что реально возвращает
+# ClickHouse и принимает HTML `<input type="datetime-local">` (см. докстроку `_as_utc` в
+# `app/completeness.py`) — обязательный `tzinfo=UTC` на каждой строке был бы шумом, не сигналом.
+"services/pulse-api/tests/test_completeness.py" = ["DTZ001"]
+"services/pulse-api/tests/test_backfill.py" = ["DTZ001"]
+"services/pulse-api/tests/test_admin_routes_integration.py" = ["DTZ001"]
 
 [tool.ruff.lint.isort]
 # Внутри сервиса ruff определяет `app`/`consumer` как first-party по расположению файла, а в
