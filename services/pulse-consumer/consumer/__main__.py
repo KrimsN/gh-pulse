@@ -23,12 +23,15 @@ from consumer.dlq import DlqProducer
 from consumer.logging_config import configure_logging
 from consumer.metrics import start_metrics_server
 
-configure_logging(get_settings().log_level)
+# Точка входа целиком исключена из покрытия pragma-комментариями — process-wiring уже проверяется
+# docker-smoke (/health на живом окружении в CI), юнит-тест с моком ClickHouse/Kafka/сигналов здесь
+# был бы фейковым покрытием ради процента.
+configure_logging(get_settings().log_level)  # pragma: no cover
 
 logger = structlog.get_logger()
 
 
-def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:  # pragma: no cover
     """Ставит остановку цикла по SIGINT/SIGTERM.
 
     `loop.add_signal_handler` работает только на Unix — контейнер сервиса всегда Linux (Dockerfile),
@@ -42,7 +45,7 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asynci
             signal.signal(sig, lambda *_args: stop_event.set())
 
 
-async def _main() -> None:
+async def _main() -> None:  # pragma: no cover
     settings = get_settings()
     start_metrics_server(settings.metrics_port)
 
@@ -83,7 +86,7 @@ async def _main() -> None:
     logger.info("pulse_consumer_stopped")
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover
     try:
         asyncio.run(_main())
     except Exception:
@@ -93,5 +96,5 @@ def main() -> None:
         raise
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

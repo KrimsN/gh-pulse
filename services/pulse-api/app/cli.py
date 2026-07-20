@@ -50,5 +50,5 @@ def main() -> None:
         asyncio.run(_create_key(owner=args.owner, rate_limit=args.rate_limit))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover — entrypoint-обвязка, проверяется docker-smoke, не юнит-тестом
     main()

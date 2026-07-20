@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +20,59 @@ import (
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/producer"
 )
+
+// TestEnvOr — задача 2.12: envOr не была покрыта ни разу. os.LookupEnv (а не os.Getenv) различает
+// «переменная не задана» и «задана пустой строкой» — оба случая табличного теста ниже проверяют
+// именно эту границу, а не просто «работает».
+func TestEnvOr(t *testing.T) {
+	const key = "GH_COLLECTOR_TEST_ENV_OR"
+
+	t.Run("переменная не задана — возвращается fallback", func(t *testing.T) {
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("Unsetenv: %v", err)
+		}
+		if got := envOr(key, "fallback"); got != "fallback" {
+			t.Errorf("envOr() = %q, want %q", got, "fallback")
+		}
+	})
+
+	t.Run("переменная задана пустой строкой — возвращается пустая строка, не fallback", func(t *testing.T) {
+		t.Setenv(key, "")
+		if got := envOr(key, "fallback"); got != "" {
+			t.Errorf("envOr() = %q, want \"\" — пустая строка это осознанное значение, не повод подставлять дефолт", got)
+		}
+	})
+
+	t.Run("переменная задана — возвращается её значение", func(t *testing.T) {
+		t.Setenv(key, "actual")
+		if got := envOr(key, "fallback"); got != "actual" {
+			t.Errorf("envOr() = %q, want %q", got, "actual")
+		}
+	})
+}
+
+// TestMetricsHandler — задача 2.12: metricsHandler не была покрыта ни разу. Проверяет, что
+// обработчик реально отдаёт метрики зарегистрированного Registry в text-формате Prometheus, а не
+// просто что он не паникует.
+func TestMetricsHandler(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "gh_collector_test_metrics_handler_total"})
+	counter.Inc()
+	reg.MustRegister(counter)
+
+	handler := metricsHandler(reg)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "gh_collector_test_metrics_handler_total 1") {
+		t.Errorf("тело /metrics не содержит зарегистрированную метрику:\n%s", rec.Body.String())
+	}
+}
 
 // TestParseHour — табличный тест на разбор --hour. Отдельно фиксирует случаи, из-за которых
 // прежняя реализация на fmt.Sscanf + time.Date молча качала не тот час вместо ошибки:

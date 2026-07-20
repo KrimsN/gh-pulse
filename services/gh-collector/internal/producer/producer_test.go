@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/testcontainers/testcontainers-go/modules/redpanda"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -203,5 +206,54 @@ func TestProduceDeliversWithEventIDKey(t *testing.T) {
 			t.Errorf("ключ сообщения для event_id=%d = %q, want %q (ADR 0008: ключ — event_id)",
 				wantEvt.EventID, gotKeys[wantEvt.EventID], wantKey)
 		}
+	}
+}
+
+// TestProduceObservesFailureOnOversizedRecord — задача 2.12: observeFailure (и NewMetrics) не были
+// покрыты ни одним тестом, а единственный реалистичный способ увидеть настоящую ошибку доставки в
+// Produce — запись, которую сам клиент (franz-go, ProducerBatchMaxBytes по умолчанию ~1 МиБ)
+// отвергает как слишком большую ещё до похода в сеть. Не мок Kafka: тот же реальный клиент и
+// брокер, что и в TestProduceDeliversWithEventIDKey, размер записи просто выбран заведомо больше
+// лимита батча, чтобы сбой был детерминированным, а не зависел от занятости брокера.
+func TestProduceObservesFailureOnOversizedRecord(t *testing.T) {
+	ctx := t.Context()
+	broker := startRedpanda(t)
+	const topic = "gh.events"
+
+	admin, err := kgo.NewClient(kgo.SeedBrokers(broker))
+	if err != nil {
+		t.Fatalf("собрать admin-клиент: %v", err)
+	}
+	defer admin.Close()
+	if _, err := kadm.NewClient(admin).CreateTopic(ctx, 6, 1, nil, topic); err != nil {
+		t.Fatalf("создать топик: %v", err)
+	}
+
+	reg := prometheus.NewRegistry()
+	metrics := NewMetrics(reg)
+
+	prod, err := New(ctx, Config{Brokers: []string{broker}, Topic: topic}, metrics, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer prod.Close()
+
+	oversized := model.Event{
+		EventID:   999,
+		EventType: "WatchEvent",
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		RepoID:    1,
+		RepoName:  strings.Repeat("x", 2*1024*1024), // заведомо больше лимита батча franz-go (~1 МиБ)
+	}
+	prod.Produce(ctx, oversized)
+	if err := prod.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if got := testutil.ToFloat64(metrics.ProduceErrors); got != 1 {
+		t.Fatalf("ProduceErrors = %v, want 1 — оверсайз-запись обязана была провалить доставку", got)
+	}
+	if got := testutil.ToFloat64(metrics.EventsProduced); got != 0 {
+		t.Fatalf("EventsProduced = %v, want 0 — оверсайз-запись не должна засчитаться успехом", got)
 	}
 }

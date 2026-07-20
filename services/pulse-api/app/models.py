@@ -40,8 +40,8 @@ class TrendingResponse(BaseModel):
 
     @field_serializer("generated_at")
     def _serialize_generated_at(self, value: datetime) -> str:
-        # По умолчанию pydantic сериализует datetime как "...+00:00"; канонический контракт
-        # события (см. «Сквозные соглашения») и пример из TASKS_DETAILED.md используют суффикс "Z".
+        # По умолчанию pydantic сериализует datetime как "...+00:00"; канонический контракт события
+        # (см. пример `created_at` в `docs/ARCHITECTURE.md`) использует суффикс "Z".
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -113,9 +113,9 @@ class Weekday(IntEnum):
     """ISO 8601 (1=понедельник…7=воскресенье) — ровно то, что отдаёт `toDayOfWeek()` в ClickHouse.
 
     Внутреннее представление; наружу эндпоинт `/api/v1/activity/heatmap` отдаёт строковое имя
-    (`.name.lower()`), а не число — см. «Сквозные соглашения» → «Кодировка дня недели» в
-    `TASKS_DETAILED.md`. Go-эквивалент в `gh-collector` намеренно не заведён (YAGNI) — день недели
-    сейчас нужен только на чтении, в этом сервисе.
+    (`.name.lower()`), а не число — снимает риск перепутать нумерацию (ISO 1–7 против JS-стиля 0–6).
+    Go-эквивалент в `gh-collector` намеренно не заведён (YAGNI) — день недели сейчас нужен только на
+    чтении, в этом сервисе.
     """
 
     MONDAY = 1

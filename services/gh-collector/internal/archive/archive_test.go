@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/KrimsN/gh-pulse/services/gh-collector/internal/model"
 )
 
@@ -23,6 +26,24 @@ import (
 // прежней пакетной переменной baseURL с восстановлением через defer.
 func newTestClient() *Client {
 	return NewClient(nil, nil)
+}
+
+// TestNewMetricsRegistersCounters — задача 2.12: остальные тесты пакета намеренно передают
+// metrics=nil (см. newTestClient) и никогда не создают настоящий *Metrics, поэтому ни NewMetrics,
+// ни ветка "не nil" у incFetchErrors/incLinesSkipped не были покрыты ни разу.
+func TestNewMetricsRegistersCounters(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics := NewMetrics(reg)
+
+	metrics.incFetchErrors()
+	metrics.incLinesSkipped()
+
+	if got := testutil.ToFloat64(metrics.FetchErrors); got != 1 {
+		t.Errorf("FetchErrors = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.LinesSkipped); got != 1 {
+		t.Errorf("LinesSkipped = %v, want 1", got)
+	}
 }
 
 func TestURLForHour(t *testing.T) {

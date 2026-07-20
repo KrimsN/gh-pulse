@@ -199,10 +199,10 @@ func TestParseRateLimitHeaders(t *testing.T) {
 
 // TestPollGoldenFixture гоняет полный путь Poll (HTTP + разбор + заголовки) против httptest.Server,
 // отдающего testdata/sample_events.json — пять реальных событий, вырезанных байт-в-байт из настоящего
-// ответа GET https://api.github.com/events (см. комментарий к сбору фикстуры в задаче 2.9,
-// TASKS_DETAILED.md). Проверяет то же, что golden-file тест в internal/archive: маппинг верен на
-// форме, которую GitHub отдаёт на самом деле, а не только на сконструированных вручную примерах —
-// и что верхнеуровневая форма Events API совпадает с Archive (общий model.ParseGitHubEvent).
+// ответа GET https://api.github.com/events. Проверяет то же, что golden-file тест в internal/archive:
+// маппинг верен на форме, которую GitHub отдаёт на самом деле, а не только на сконструированных
+// вручную примерах — и что верхнеуровневая форма Events API совпадает с Archive (общий
+// model.ParseGitHubEvent).
 func TestPollGoldenFixture(t *testing.T) {
 	t.Parallel()
 
