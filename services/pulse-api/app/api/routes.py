@@ -44,6 +44,7 @@ from app.api.schemas import (
     Window,
 )
 from app.core.config import get_settings
+from app.core.errors import ApiError
 from app.security.api_key import enforce_rate_limit
 
 # Задача 2.11: применяется на уровне роутера, а не на каждом эндпоинте — общий механизм для всех
@@ -215,7 +216,7 @@ REPO_CARD_RESPONSES: dict[int | str, dict[str, object]] = {
     responses=REPO_CARD_RESPONSES,
     dependencies=[Depends(enforce_rate_limit)],
 )
-async def repo_card(request: Request, owner: str, name: str) -> Response | JSONResponse:
+async def repo_card(request: Request, owner: str, name: str) -> Response:
     """Карточка репозитория: суммарная активность по типам событий и динамика звёзд по дням.
 
     `totals.stars` и `stars_by_day` читают `repo_stars_hourly_mv` (задача 2.1/2.3); `pushes`/`forks`/
@@ -230,8 +231,10 @@ async def repo_card(request: Request, owner: str, name: str) -> Response | JSONR
         name: Имя репозитория (второй сегмент `owner/name`).
 
     Returns:
-        Карточку репозитория (или 304 без тела при совпавшем `If-None-Match`), либо 404 в едином
-        формате ошибки, если `owner/name` не встречался ни в одном событии.
+        Карточку репозитория, либо 304 без тела при совпавшем `If-None-Match`.
+
+    Raises:
+        ApiError: 404, если `owner/name` не встречался ни в одном событии.
     """
     repo_name = f"{owner}/{name}"
     lookup_query, lookup_parameters = build_repo_lookup_query(repo_name)
@@ -239,9 +242,8 @@ async def repo_card(request: Request, owner: str, name: str) -> Response | JSONR
     repo_id, total_events, pushes, forks, issues = lookup_result.result_rows[0]
 
     if total_events == 0:
-        return JSONResponse(
-            content={"error": {"code": "not_found", "message": f"Repository {repo_name} not found"}},
-            status_code=status.HTTP_404_NOT_FOUND,
+        raise ApiError(
+            status_code=status.HTTP_404_NOT_FOUND, code="not_found", message=f"Repository {repo_name} not found"
         )
 
     stars_query, stars_parameters = build_repo_stars_total_query(repo_id)
