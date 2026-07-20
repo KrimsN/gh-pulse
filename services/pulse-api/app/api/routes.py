@@ -10,7 +10,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.cache import cached_json_response
 from app.api.health import probe_dependency
-from app.api.http_cache import conditional_response, etag_for
+from app.api.http_cache import conditional_response, json_conditional_response
 from app.api.pagination import TrendingCursor, decode_cursor, encode_cursor
 from app.api.queries import (
     build_heatmap_query,
@@ -261,9 +261,7 @@ async def repo_card(request: Request, owner: str, name: str) -> Response:
         totals=RepoTotals(stars=stars, pushes=pushes, forks=forks, issues=issues),
         stars_by_day=stars_by_day,
     )
-    body = payload.model_dump_json().encode()
-    headers = {"Cache-Control": REPO_CARD_CACHE_CONTROL, "ETag": etag_for(body)}
-    return conditional_response(request, body, headers)
+    return json_conditional_response(request, payload, REPO_CARD_CACHE_CONTROL)
 
 
 @router.get(
@@ -359,9 +357,7 @@ async def activity_heatmap(request: Request) -> Response:
         HeatmapCell(weekday=cast("WeekdayName", Weekday(iso_weekday).name.lower()), hour=hour, events=events)
         for iso_weekday, hour, events in result.result_rows
     ]
-    body = HeatmapResponse(cells=cells).model_dump_json().encode()
-    headers = {"Cache-Control": HEATMAP_CACHE_CONTROL, "ETag": etag_for(body)}
-    return conditional_response(request, body, headers)
+    return json_conditional_response(request, HeatmapResponse(cells=cells), HEATMAP_CACHE_CONTROL)
 
 
 @router.get(
@@ -400,6 +396,4 @@ async def stats(request: Request) -> Response:
         distinct_repos=distinct_repos,
         distinct_actors=distinct_actors,
     )
-    body = payload.model_dump_json().encode()
-    headers = {"Cache-Control": STATS_CACHE_CONTROL, "ETag": etag_for(body)}
-    return conditional_response(request, body, headers)
+    return json_conditional_response(request, payload, STATS_CACHE_CONTROL)

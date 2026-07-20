@@ -12,6 +12,7 @@ import hashlib
 
 from fastapi import Request
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 
 def etag_for(body: bytes) -> str:
@@ -40,3 +41,15 @@ def conditional_response(request: Request, body: bytes, headers: dict[str, str])
     if request.headers.get("if-none-match") == headers.get("ETag"):
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
+
+
+def json_conditional_response(request: Request, payload: BaseModel, cache_control: str) -> Response:
+    """Сериализует `payload`, считает `ETag` и отдаёт условный ответ — тройка, повторявшаяся в
+    `repo_card`/`activity_heatmap`/`stats` (все без Redis-кэша, см. докстроку модуля).
+
+    Returns:
+        `Response` со статусом 304 (без тела) при совпадении `ETag`, иначе 200 с телом `payload`.
+    """
+    body = payload.model_dump_json().encode()
+    headers = {"Cache-Control": cache_control, "ETag": etag_for(body)}
+    return conditional_response(request, body, headers)
