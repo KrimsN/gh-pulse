@@ -1,0 +1,17 @@
+{% if keys %}
+<table>
+  <thead><tr><th>Owner</th><th>Роль</th><th>Rate limit</th><th>Created</th></tr></thead>
+  <tbody>
+    {% for key in keys %}
+    <tr>
+      <td>{{ key.owner }}</td>
+      <td>{{ key.role }}</td>
+      <td>{{ key.rate_limit }}</td>
+      <td>{{ key.created_at.isoformat() }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Активных ключей нет.</p>
+{% endif %}

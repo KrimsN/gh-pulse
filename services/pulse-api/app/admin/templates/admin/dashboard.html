@@ -57,6 +57,29 @@
     <a href="https://github.com/KrimsN/gh-pulse/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md</a>
   </section>
 
+  {% if is_admin %}
+  <!-- Скрытие за is_admin — только UX: GET/POST /admin/keys всё равно вернут честный 403
+       ключу без ADMIN_WRITE (см. app/admin/auth.py, ADR 0010). -->
+  <section>
+    <h2>Ключи</h2>
+    <form hx-post="/admin/keys" hx-target="#key-issue-result">
+      <label>Владелец <input type="text" name="owner" required></label>
+      <label>Лимит <input type="number" name="rate_limit" value="100" min="1" style="width: 5rem"></label>
+      <label>Роль
+        <select name="role">
+          {% for role in roles %}
+          <option value="{{ role }}">{{ role }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Выпустить</button>
+    </form>
+    <div id="key-issue-result"></div>
+
+    <div id="keys-list" hx-get="/admin/keys" hx-trigger="load">Загрузка…</div>
+  </section>
+  {% endif %}
+
   <section>
     <h2>Логи</h2>
     <form hx-get="/admin/logs" hx-target="#logs-result" hx-trigger="submit, load">

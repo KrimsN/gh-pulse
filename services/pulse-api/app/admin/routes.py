@@ -1,10 +1,14 @@
-"""Роуты `/admin` — наполненность данных, генератор бэкфила, ссылки на телеметрию, логи (задача 4.4).
+"""Роуты `/admin` — наполненность данных, генератор бэкфила, ссылки на телеметрию, логи, ключи
+(задачи 4.4, 4.5).
 
 Все роуты защищены `require_admin_auth` (HTTP Basic, `app/admin/auth.py`) через `dependencies=`
-роутера — тот же приём, что и `reject_unknown_query_params` в `app/api/routes.py`. `include_in_schema`
-берётся из `Settings.debug`: по умолчанию `False` — это внутренний эксплуатационный инструмент, а не
-часть публичного контракта `/api/v1/*`, который документирует `/openapi.json` (задача 2.7/2.11).
-`DEBUG=true` в окружении включает `/admin/*` обратно в схему — для удобства при локальной разработке.
+роутера — тот же приём, что и `reject_unknown_query_params` в `app/api/routes.py`. `/admin/keys`
+дополнительно требует бит `ADMIN_WRITE` через `require_admin_permission` на уровне роута (задача 4.5,
+ADR 0010) — router-level зависимость даёт только базовый доступ (`ADMIN_READ`), не полный.
+`include_in_schema` берётся из `Settings.debug`: по умолчанию `False` — это внутренний
+эксплуатационный инструмент, а не часть публичного контракта `/api/v1/*`, который документирует
+`/openapi.json` (задача 2.7/2.11). `DEBUG=true` в окружении включает `/admin/*` обратно в схему — для
+удобства при локальной разработке.
 
 Даты (`start`/`end`) приходят из HTML `<input type="datetime-local">` без смещения — FastAPI/pydantic
 разбирает такую строку в naive `datetime`, что ровно совпадает с тем, как ClickHouse хранит и
@@ -15,15 +19,25 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from app.admin.auth import require_admin_auth
+from app.admin.auth import AdminIdentity, require_admin_auth, require_admin_permission, require_same_origin
 from app.admin.backfill import build_backfill_command
 from app.admin.completeness import build_present_hours_query, compute_missing_hours
 from app.admin.logs_viewer import ADMIN_SERVICES, AdminService, read_log_tail
 from app.core.config import get_settings
+from app.security.keys import (
+    ROLE_PRESETS,
+    ApiKeyPermission,
+    ApiKeyRoleName,
+    describe_permissions,
+    generate_api_key,
+    hash_api_key,
+    insert_api_key,
+    list_active_keys,
+)
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_auth)], include_in_schema=get_settings().debug)
 
@@ -37,8 +51,13 @@ DEFAULT_COMPLETENESS_WINDOW_HOURS = 24
 
 
 @router.get("", response_class=HTMLResponse)
-async def admin_dashboard(request: Request) -> HTMLResponse:
+async def admin_dashboard(
+    request: Request, identity: Annotated[AdminIdentity, Depends(require_admin_auth)]
+) -> HTMLResponse:
     """Оболочка `/admin`: формы и ссылки статичны, данные фрагментов подгружает HTMX по `hx-trigger="load"`.
+
+    `is_admin` скрывает секцию «Ключи» от ключей без `ADMIN_WRITE` — это UX, не граница безопасности:
+    `GET`/`POST /admin/keys` всё равно вернут честный 403 (см. `app/admin/auth.py`).
 
     Returns:
         Полную HTML-страницу дашборда.
@@ -56,6 +75,8 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             "prometheus_url": settings.prometheus_url,
             "jaeger_url": settings.jaeger_url,
             "services": ADMIN_SERVICES,
+            "is_admin": bool(identity.permissions & ApiKeyPermission.ADMIN_WRITE),
+            "roles": list(ROLE_PRESETS),
         },
     )
 
@@ -122,4 +143,54 @@ async def admin_logs(
     tail = read_log_tail(Path(get_settings().admin_log_dir), service, lines, level)
     return templates.TemplateResponse(
         request=request, name="admin/logs_fragment.html", context={"lines": tail, "service": service}
+    )
+
+
+@router.get(
+    "/keys", response_class=HTMLResponse, dependencies=[Depends(require_admin_permission(ApiKeyPermission.ADMIN_WRITE))]
+)
+async def admin_keys(request: Request) -> HTMLResponse:
+    """Фрагмент-таблица выпущенных ключей (задача 4.5) — owner/уровень доступа/rate_limit/created_at.
+
+    `ADMIN_WRITE`, не только `ADMIN_READ`: сам список owner'ов без секретов всё равно закрыт от
+    `maintenance` — решение пользователя, весь раздел «Ключи» admin-only целиком.
+
+    Returns:
+        HTML-фрагмент с таблицей активных ключей.
+    """
+    keys = await list_active_keys(request.app.state.postgres)
+    rows = [{**dict(key), "role": describe_permissions(key["permissions"])} for key in keys]
+    return templates.TemplateResponse(request=request, name="admin/keys_fragment.html", context={"keys": rows})
+
+
+@router.post(
+    "/keys",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_admin_permission(ApiKeyPermission.ADMIN_WRITE)), Depends(require_same_origin)],
+)
+async def admin_issue_key(
+    request: Request,
+    owner: Annotated[str, Form(min_length=1)],
+    rate_limit: Annotated[int, Form(ge=1)],
+    role: Annotated[ApiKeyRoleName, Form()],
+) -> HTMLResponse:
+    """Выпустить новый ключ, вернуть сырой ключ фрагментом ровно один раз (задача 4.5).
+
+    Тот же принцип, что у CLI `create-key` (`app/cli.py`): сырой ключ существует только в этом
+    ответе, дальше в системе — только его SHA-256 (`app/security/keys.py`). `require_same_origin`
+    закрывает CSRF на этом write-роуте — см. `app/admin/auth.py`.
+
+    Returns:
+        HTML-фрагмент с id, owner, ролью и сырым ключом.
+    """
+    raw_key = generate_api_key()
+    key_hash = hash_api_key(raw_key)
+    async with request.app.state.postgres.acquire() as connection:
+        key_id = await insert_api_key(
+            connection, owner=owner, rate_limit=rate_limit, key_hash=key_hash, permissions=ROLE_PRESETS[role]
+        )
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/key_issue_result_fragment.html",
+        context={"id": key_id, "raw_key": raw_key, "owner": owner, "role": role},
     )

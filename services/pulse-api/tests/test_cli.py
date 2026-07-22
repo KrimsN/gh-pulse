@@ -45,3 +45,59 @@ async def test_main_create_key_inserts_row_and_prints_raw_key_once(
     assert row is not None
     assert row["owner"] == "cli-test"
     assert row["rate_limit"] == 42
+
+
+async def test_main_create_key_role_defaults_to_api_only(
+    migrated_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Задача 4.5: без `--role` уже задокументированная в README команда не начинает молча выдавать
+    доступ к `/admin` — дефолт CLI (`api_only`) осознанно другой, чем дефолт `insert_api_key`.
+    """
+    monkeypatch.setattr(cli_module, "get_settings", lambda: Settings(postgres_dsn=SecretStr(migrated_dsn)))
+    monkeypatch.setattr(
+        sys, "argv", ["app.cli", "create-key", "--owner", "cli-role-default-test", "--rate-limit", "10"]
+    )
+
+    await asyncio.to_thread(main)
+
+    captured = capsys.readouterr()
+    assert "role: api_only" in captured.out
+
+    connection = await asyncpg.connect(dsn=migrated_dsn)
+    try:
+        row = await connection.fetchrow("SELECT permissions FROM api_keys WHERE owner = $1", "cli-role-default-test")
+    finally:
+        await connection.close()
+
+    assert row is not None
+    assert row["permissions"] == 0
+
+
+async def test_main_create_key_role_admin_grants_admin_bits(
+    migrated_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Задача 4.5: `--role admin` — bootstrap-путь для самого первого ключа с доступом к `/admin`."""
+    monkeypatch.setattr(cli_module, "get_settings", lambda: Settings(postgres_dsn=SecretStr(migrated_dsn)))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["app.cli", "create-key", "--owner", "cli-role-admin-test", "--rate-limit", "10", "--role", "admin"],
+    )
+
+    await asyncio.to_thread(main)
+
+    captured = capsys.readouterr()
+    assert "role: admin" in captured.out
+
+    connection = await asyncpg.connect(dsn=migrated_dsn)
+    try:
+        row = await connection.fetchrow("SELECT permissions FROM api_keys WHERE owner = $1", "cli-role-admin-test")
+    finally:
+        await connection.close()
+
+    assert row is not None
+    assert row["permissions"] == 3

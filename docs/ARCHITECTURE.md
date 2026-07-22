@@ -265,6 +265,7 @@ CREATE TABLE api_keys (
     id          BIGSERIAL PRIMARY KEY,
     key_hash    TEXT NOT NULL UNIQUE,      -- SHA-256 от ключа; сырой ключ не храним
     owner       TEXT NOT NULL,
+    permissions SMALLINT NOT NULL DEFAULT 0,  -- битовые флаги доступа к /admin; не влияют на X-API-Key
     rate_limit  INT NOT NULL DEFAULT 100,  -- запросов в минуту
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at  TIMESTAMPTZ
@@ -284,6 +285,10 @@ CREATE INDEX ix_saved_reports_key ON saved_reports (api_key_id, created_at DESC)
 Схема применяется автоматически при `docker compose up` одноразовым контейнером
 `postgres-migrate` (`alembic upgrade head`, `services/pulse-api/alembic/`) — ручных шагов не
 требуется.
+
+`api_keys.permissions` — уровень доступа ключа к `/admin` (задача 4.5): битовые флаги, не отдельные
+допустимые строки, расшифровка битов — `ApiKeyPermission` в `services/pulse-api/app/security/keys.py`,
+обоснование выбора этого формата над `TEXT` + `CHECK` — [ADR 0010](adr/0010-api-key-permission-bitflags.md).
 
 ## API (черновик контракта)
 

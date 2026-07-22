@@ -94,6 +94,14 @@ curl localhost:8000/health
 docker compose exec pulse-api python -m app.cli create-key --owner "demo" --rate-limit 100
 ```
 
+По умолчанию (без `--role`) ключ не даёт доступа к `/admin` — только `X-API-Key` для `/api/v1/*`.
+Первый ключ с доступом к `/admin` (и дальше — выпуск остальных ключей уже через веб-форму панели)
+выпускается тем же CLI явным флагом:
+
+```bash
+docker compose exec pulse-api python -m app.cli create-key --owner "admin" --rate-limit 100 --role admin
+```
+
 Все `/api/v1/*`-эндпоинты требуют этот ключ в заголовке `X-API-Key`:
 
 ```bash

@@ -19,11 +19,12 @@ import pytest
 from fastapi import FastAPI
 from testcontainers.clickhouse import ClickHouseContainer
 
+import app.admin.auth as admin_auth_module
 import app.admin.routes as admin_routes_module
 from app.admin.routes import router as admin_router
 from app.core.config import Settings
 from app.core.errors import ApiError, api_error_handler
-from app.security.keys import generate_api_key, hash_api_key, insert_api_key
+from app.security.keys import ROLE_PRESETS, find_active_key, generate_api_key, hash_api_key, insert_api_key
 from consumer.clickhouse import insert_events_batch
 from consumer.model import Event
 
@@ -290,3 +291,294 @@ async def test_admin_logs_reads_from_configured_log_directory(
 
     assert response.status_code == httpx.codes.OK
     assert "hello_from_test" in response.text
+
+
+async def test_admin_maintenance_key_sees_read_only_but_not_keys(
+    clickhouse_container: ClickHouseContainer,
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    """Задача 4.5: `maintenance` (только `ADMIN_READ`) проходит существующие read-only роуты, но
+    получает 403 на `/admin/keys` — раздел «Ключи» admin-only целиком, не только выпуск.
+    """
+    await _apply_migrations(clickhouse_container)
+
+    clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
+        host=clickhouse_container.get_container_host_ip(),
+        port=int(clickhouse_container.get_exposed_port(8123)),
+        username=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        database="ghpulse",
+    )
+
+    raw_key = generate_api_key()
+    async with postgres_pool.acquire() as connection:
+        await insert_api_key(
+            connection,
+            owner="maintenance-test",
+            rate_limit=100,
+            key_hash=hash_api_key(raw_key),
+            permissions=ROLE_PRESETS["maintenance"],
+        )
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(admin_router)
+    app.state.clickhouse = clickhouse
+    app.state.postgres = postgres_pool
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            dashboard = await client.get("/admin", headers=_basic_auth_header(raw_key))
+            keys_list = await client.get("/admin/keys", headers=_basic_auth_header(raw_key))
+    finally:
+        await clickhouse.close()
+
+    assert dashboard.status_code == httpx.codes.OK
+    assert keys_list.status_code == httpx.codes.FORBIDDEN
+
+
+async def test_admin_api_only_key_gets_401_not_403(
+    clickhouse_container: ClickHouseContainer,
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    """Задача 4.5: `api_only` (`permissions=0`) не проходит базовый гейт `/admin` вовсе — 401, тот же
+    ответ, что и на неверный пароль, чтобы не давать оракул валидности ключа (ADR 0010).
+    """
+    await _apply_migrations(clickhouse_container)
+
+    clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
+        host=clickhouse_container.get_container_host_ip(),
+        port=int(clickhouse_container.get_exposed_port(8123)),
+        username=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        database="ghpulse",
+    )
+
+    raw_key = generate_api_key()
+    async with postgres_pool.acquire() as connection:
+        await insert_api_key(
+            connection,
+            owner="api-only-test",
+            rate_limit=100,
+            key_hash=hash_api_key(raw_key),
+            permissions=ROLE_PRESETS["api_only"],
+        )
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(admin_router)
+    app.state.clickhouse = clickhouse
+    app.state.postgres = postgres_pool
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/admin", headers=_basic_auth_header(raw_key))
+    finally:
+        await clickhouse.close()
+
+    assert response.status_code == httpx.codes.UNAUTHORIZED
+    assert response.headers["www-authenticate"] == "Basic"
+
+
+async def test_admin_issue_key_creates_row_with_requested_permissions(
+    clickhouse_container: ClickHouseContainer,
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    """Задача 4.5: `POST /admin/keys` как `admin` с корректным `Origin` создаёт строку с запрошенным
+    уровнем доступа и возвращает сырой ключ один раз.
+    """
+    await _apply_migrations(clickhouse_container)
+
+    clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
+        host=clickhouse_container.get_container_host_ip(),
+        port=int(clickhouse_container.get_exposed_port(8123)),
+        username=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        database="ghpulse",
+    )
+
+    admin_key = generate_api_key()
+    async with postgres_pool.acquire() as connection:
+        await insert_api_key(
+            connection,
+            owner="admin-issuer-test",
+            rate_limit=100,
+            key_hash=hash_api_key(admin_key),
+            permissions=ROLE_PRESETS["admin"],
+        )
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(admin_router)
+    app.state.clickhouse = clickhouse
+    app.state.postgres = postgres_pool
+
+    headers = {**_basic_auth_header(admin_key), "Origin": "http://test"}
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/admin/keys",
+                data={"owner": "issued-key", "rate_limit": "50", "role": "maintenance"},
+                headers=headers,
+            )
+    finally:
+        await clickhouse.close()
+
+    assert response.status_code == httpx.codes.OK
+    assert "сохраните" in response.text
+
+    async with postgres_pool.acquire() as connection:
+        row = await connection.fetchrow(
+            "SELECT owner, rate_limit, permissions FROM api_keys WHERE owner = $1", "issued-key"
+        )
+    assert row is not None
+    assert row["rate_limit"] == 50
+    assert row["permissions"] == int(ROLE_PRESETS["maintenance"])
+
+
+async def test_admin_issue_key_rejects_cross_origin_request(
+    clickhouse_container: ClickHouseContainer,
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    """Задача 4.5: `Origin`, не совпадающий с host запроса, получает 403 и не создаёт строку в БД —
+    CSRF-защита первого write-роута `/admin` (ADR 0010).
+    """
+    await _apply_migrations(clickhouse_container)
+
+    clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
+        host=clickhouse_container.get_container_host_ip(),
+        port=int(clickhouse_container.get_exposed_port(8123)),
+        username=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        database="ghpulse",
+    )
+
+    admin_key = generate_api_key()
+    async with postgres_pool.acquire() as connection:
+        await insert_api_key(
+            connection,
+            owner="admin-csrf-test",
+            rate_limit=100,
+            key_hash=hash_api_key(admin_key),
+            permissions=ROLE_PRESETS["admin"],
+        )
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(admin_router)
+    app.state.clickhouse = clickhouse
+    app.state.postgres = postgres_pool
+
+    headers = {**_basic_auth_header(admin_key), "Origin": "http://evil.example"}
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/admin/keys",
+                data={"owner": "should-not-exist", "rate_limit": "50", "role": "admin"},
+                headers=headers,
+            )
+    finally:
+        await clickhouse.close()
+
+    assert response.status_code == httpx.codes.FORBIDDEN
+
+    async with postgres_pool.acquire() as connection:
+        row = await connection.fetchrow("SELECT id FROM api_keys WHERE owner = $1", "should-not-exist")
+    assert row is None
+
+
+async def test_admin_keys_list_excludes_secrets(
+    clickhouse_container: ClickHouseContainer,
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    """Задача 4.5: `GET /admin/keys` не содержит ни `key_hash`, ни сырого ключа в HTML."""
+    await _apply_migrations(clickhouse_container)
+
+    clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
+        host=clickhouse_container.get_container_host_ip(),
+        port=int(clickhouse_container.get_exposed_port(8123)),
+        username=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        database="ghpulse",
+    )
+
+    admin_key = generate_api_key()
+    async with postgres_pool.acquire() as connection:
+        await insert_api_key(
+            connection,
+            owner="admin-list-test",
+            rate_limit=100,
+            key_hash=hash_api_key(admin_key),
+            permissions=ROLE_PRESETS["admin"],
+        )
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(admin_router)
+    app.state.clickhouse = clickhouse
+    app.state.postgres = postgres_pool
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/admin/keys", headers=_basic_auth_header(admin_key))
+    finally:
+        await clickhouse.close()
+
+    assert response.status_code == httpx.codes.OK
+    assert admin_key not in response.text
+    assert hash_api_key(admin_key) not in response.text
+    assert "admin-list-test" in response.text
+
+
+async def test_require_admin_auth_result_is_cached_within_request(
+    clickhouse_container: ClickHouseContainer,
+    postgres_pool: asyncpg.Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Задача 4.5: `require_admin_auth`, использованный и router-level, и внутри
+    `require_admin_permission` на одном роуте, вызывает `find_active_key` ровно один раз на запрос —
+    FastAPI кэширует результат зависимости по callable (см. докстроку `require_admin_permission`).
+    """
+    await _apply_migrations(clickhouse_container)
+
+    clickhouse: AsyncClient = await clickhouse_connect.get_async_client(
+        host=clickhouse_container.get_container_host_ip(),
+        port=int(clickhouse_container.get_exposed_port(8123)),
+        username=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        database="ghpulse",
+    )
+
+    admin_key = generate_api_key()
+    async with postgres_pool.acquire() as connection:
+        await insert_api_key(
+            connection,
+            owner="admin-cache-test",
+            rate_limit=100,
+            key_hash=hash_api_key(admin_key),
+            permissions=ROLE_PRESETS["admin"],
+        )
+
+    call_count = 0
+
+    async def counting_find_active_key(pool: asyncpg.Pool, key_hash: str) -> asyncpg.Record | None:
+        nonlocal call_count
+        call_count += 1
+        return await find_active_key(pool, key_hash)
+
+    monkeypatch.setattr(admin_auth_module, "find_active_key", counting_find_active_key)
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(admin_router)
+    app.state.clickhouse = clickhouse
+    app.state.postgres = postgres_pool
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/admin/keys", headers=_basic_auth_header(admin_key))
+    finally:
+        await clickhouse.close()
+
+    assert response.status_code == httpx.codes.OK
+    assert call_count == 1
