@@ -198,6 +198,19 @@ services:
       timeout: 3s
       retries: 10
 
+  # Одноразовая подготовка каталога логов — тот же класс контейнеров, что redpanda-init и
+  # postgres-migrate. Хостовый `./logs` в свежем клоне отсутствует, и Docker на Linux создаёт его от
+  # root, а pulse-api/pulse-consumer пишут от непривилегированного uid 999 (USER в их Dockerfile) —
+  # без chown первый же RotatingFileHandler падал бы PermissionError на любой Linux-машине, включая
+  # CI (на Docker Desktop под Windows/macOS этого не видно: его слой прав bind mount «уплощает»).
+  logs-init:
+    image: busybox:1.37
+    container_name: ghpulse-logs-init
+    command: ["chown", "999:999", "/var/log/ghpulse"]
+    volumes:
+      - ./logs:/var/log/ghpulse
+    restart: "no"
+
   pulse-api:
     build:
       context: .
@@ -237,6 +250,8 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
+      logs-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -275,6 +290,8 @@ services:
         condition: service_completed_successfully
       jaeger:
         condition: service_healthy
+      logs-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8001/metrics')"]
       interval: 5s

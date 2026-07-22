@@ -74,11 +74,20 @@ def configure_logging(log_level: LogLevel, log_file: str | None = None) -> None:
     root.addHandler(handler)
 
     if log_file:
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUP_COUNT
-        )
-        file_handler.setFormatter(formatter)
-        root.addHandler(file_handler)
+        # Файловый лог — вспомогательный канал (`/admin/logs`), не причина не поднять сервис:
+        # недоступный файл (нет прав на bind mount, нет каталога, read-only ФС) деградирует до
+        # stdout-only с warning, вместо PermissionError на старте всего процесса.
+        try:
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUP_COUNT
+            )
+        except OSError as exc:
+            structlog.get_logger(__name__).warning(
+                "log_file_unavailable", log_file=log_file, error=str(exc), fallback="stdout-only"
+            )
+        else:
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
 
     root.setLevel(log_level)
 

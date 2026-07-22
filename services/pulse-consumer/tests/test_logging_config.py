@@ -6,6 +6,7 @@
 import json
 import logging
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 import structlog
@@ -38,6 +39,26 @@ def test_configure_logging_sets_root_level_and_single_handler() -> None:
     assert root.level == logging.DEBUG
     assert len(root.handlers) == 1
     assert isinstance(root.handlers[0], logging.StreamHandler)
+
+
+@pytest.mark.usefixtures("_restore_logging_state")
+def test_configure_logging_survives_unwritable_log_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Недоступный `log_file` не роняет сервис (CI падал PermissionError на bind mount `./logs`) —
+    логгер деградирует до stdout-only с warning вместо исключения на старте процесса.
+    """
+    unwritable = tmp_path / "no-such-dir" / "consumer.log"
+
+    configure_logging("INFO", log_file=str(unwritable))
+
+    root = logging.getLogger()
+    assert len(root.handlers) == 1  # только StreamHandler, файловый не добавился
+    assert isinstance(root.handlers[0], logging.StreamHandler)
+
+    err = capsys.readouterr().err
+    assert "log_file_unavailable" in err
 
 
 @pytest.mark.usefixtures("_restore_logging_state")
