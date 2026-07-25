@@ -12,8 +12,12 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# disable_existing_loggers=False обязателен: дефолт fileConfig — True, и каждый программный запуск
+# миграций (фикстура migrated_dsn в тестах гоняет upgrade/downgrade на каждый тест) молча выключал
+# бы все уже созданные логгеры процесса — их записи переставали доходить до хэндлеров без единой
+# ошибки. Для отдельного контейнера postgres-migrate разницы нет, там процесс живёт одну команду.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Миграции здесь пишутся руками сырым SQL (op.execute(...)), без деклараций ORM-моделей —
 # autogenerate не используется и target_metadata ему не нужен.
